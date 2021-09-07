@@ -7,9 +7,13 @@
 
 ### Repetition operators:
 `?` At most once
+
 `+` One or more
+
 `*` Any number of times
+
 `{n}` `n` times, where `n` is an `int >= 0`
+
 `{n,m}` `n` through `m` times, ibid.
 
 ### Legal character literals:
@@ -18,8 +22,11 @@ special characters, which must be escaped with `\`
 
 ### Character ranges:
 `a-z` Lowercase alphabeticals
+
 `A-Z` Uppercase alphabeticals
+
 `0-9` Digits
+
 `A-z` Alphabeticals, upper and lowercase
 
 ### Metacharacters:
@@ -27,6 +34,7 @@ special characters, which must be escaped with `\`
 
 ### Grouping operators:
 `[]` Character class
+
 `()` Capture group
 
 

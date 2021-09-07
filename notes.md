@@ -1,36 +1,36 @@
-#Notes
+# Notes
 
-##Regex syntax
+## Regex syntax
 
-###Escape character
+### Escape character
 `\` Following character is literal
 
-###Repetition operators:
+### Repetition operators:
 `?` At most once
 `+` One or more
 `*` Any number of times
 `{n}` `n` times, where `n` is an `int >= 0`
 `{n,m}` `n` through `m` times, ibid.
 
-###Legal character literals:
+### Legal character literals:
 All characters are legal except those which overlap with the
 special characters, which must be escaped with `\`
 
-###Character ranges:
+### Character ranges:
 `a-z` Lowercase alphabeticals
 `A-Z` Uppercase alphabeticals
 `0-9` Digits
 `A-z` Alphabeticals, upper and lowercase
 
-###Metacharacters:
+### Metacharacters:
 `.` Wildcard, matches any character
 
-###Grouping operators:
+### Grouping operators:
 `[]` Character class
 `()` Capture group
 
 
-##Compiled regex (Finite Automata)
+## Compiled regex (Finite Automata)
 
 Regular expressions compile to 'Finite Automata' or finite state machines.
 These machines start in some initial state s<sub>0</sub> and, given certain

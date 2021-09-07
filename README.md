@@ -2,5 +2,5 @@
 
 A grep implementation written for practice
 
-## Todo
+## TODO
 - Write `regex` compiler

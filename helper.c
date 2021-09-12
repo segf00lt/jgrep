@@ -1,8 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-
-const size_t CHARSIZE = sizeof(char);
+#include "const.h"
 
 inline size_t roundpow2(size_t n) {
 	size_t i = n;

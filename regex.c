@@ -1,34 +1,38 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "const.h"
 
 typedef struct {
 	char* data;
+	char* top;
 	int height;
 	int capacity;
-	char* top;
 } Stack;
 
 char peek(Stack* s) { return *(s->top); }
 
-void pile(Stack* s, char c) {
+int pile(Stack* s, char c) {
 	size_t height = s->height;
 	if(height == s->capacity - 1)
-		return;
+		return 1;
 	else if(height)
 		*(++(s->top)) = c;
 	else
 		*(s->top) = c;
 
 	++(s->height);
+	return 0;
 }
 
 char pop(Stack* s) {
 	char c = *(s->top);
 	*(s->top) = 0;
-	if(s->top > s->data)
+	if(s->top > s->data) {
 		--s->top;
-	--(s->height);
+		--(s->height);
+	} else
+		s->height = 0;
 	return c;
 }
 
@@ -37,21 +41,26 @@ char* postfix_fmt(char* exp) {
 
 	Stack stack;
 	stack.height = 0;
-	stack.capacity = (l_exp * 2) + 1;
-	stack.data = (char*)calloc(stack.capacity, sizeof(char));
+	stack.capacity = l_exp + 1;
+	stack.data = (char*)calloc(stack.capacity, CHARSIZE);
 	stack.top = stack.data;
 
-	char* buf = (char*)calloc((l_exp * 2) + 1, sizeof(char));
+	char* buf = (char*)calloc((l_exp * 2) + 1, CHARSIZE);
 	int i = 0;
 
 	int n_atoms = 0;
 
 	// store values of n_atoms prior to entering a group
-	int* prev_n_atoms = (int*)calloc(l_exp + 1, sizeof(char));
+	int* prev_atoms = (int*)calloc(l_exp + 1, CHARSIZE);
 	int j = 0;
 
-	char* c = NULL;
-	for(c = exp; *c; c++) {
+	inline void cleanup() {
+		free(prev_atoms);
+		free(buf);
+		free(stack.data);
+	}
+
+	for(char* c = exp; *c; ++c) {
 		switch(*c) {
 			case '(':
 				if(n_atoms > 1) {
@@ -59,8 +68,7 @@ char* postfix_fmt(char* exp) {
 					--n_atoms;
 				}
 
-				prev_n_atoms[j] = n_atoms;
-				++j;
+				prev_atoms[j++] = n_atoms;
 
 				n_atoms = 0;
 
@@ -81,8 +89,11 @@ char* postfix_fmt(char* exp) {
 				break;
 
 			case ')':
-				if(j == 0 || n_atoms == 0)
+				if(j == 0 || n_atoms == 0) {
+					fprintf(stderr, "error: mismatched or empty parentheses\n");
+					cleanup();
 					return NULL;
+				}
 
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = '&';
@@ -90,16 +101,10 @@ char* postfix_fmt(char* exp) {
 				for(char top = peek(&stack); top != 0 && top != '('; top = peek(&stack))
 					buf[i++] = pop(&stack);
 
-				if(!stack.height) {
-					fprintf(stderr, "error: mismatched parentheses\n");
-					return NULL;
-				}
-
 				pop(&stack);
 
-				// remember to decrement the position in prev_n_atoms
-				--j;
-				n_atoms = prev_n_atoms[j] + 1;
+				// remember to decrement the position in prev_atoms
+				n_atoms = prev_atoms[--j] + 1;
 				break;
 
 			case '*':
@@ -132,33 +137,29 @@ char* postfix_fmt(char* exp) {
 		}
 	}
 
-	if(j != 0)
+	if(j != 0) {
+		fprintf(stderr, "error: mismatched parentheses\n");
+		cleanup();
 		return NULL;
-	free(prev_n_atoms);
+	}
 
 	for(--n_atoms; n_atoms > 0; --n_atoms)
 		buf[i++] = '&';
 
-	while(stack.height > 0) {
-		if(*(stack.top) == '(') {
-			fprintf(stderr, "error: mismatched parentheses\n");
-			return NULL;
-		}
+	while(stack.height > 0)
 		buf[i++] = pop(&stack);
-	}
 
-	free(stack.data);
 	// remember to free post when done
-	char* post = (char*)calloc((strlen(buf) + 1), sizeof(char));
+	char* post = (char*)calloc((strlen(buf) + 1), CHARSIZE);
 	strcpy(post, buf);
 
-	free(buf);
+	cleanup();
 	return post;
 }
 
 int main(int argc, char* argv[]) {
 	char* post = postfix_fmt(argv[1]);
-	printf("%s\n", post);
+	printf("%s\n", post ? post : "");
 	free(post);
 
 	return 0;

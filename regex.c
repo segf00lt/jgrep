@@ -2,48 +2,16 @@
 #include <string.h>
 #include <stdlib.h>
 #include "const.h"
+#include "stack.h"
 
-typedef struct {
-	char* data;
-	char* top;
-	int height;
-	int capacity;
-} Stack;
-
-char peek(Stack* s) { return *(s->top); }
-
-int pile(Stack* s, char c) {
-	size_t height = s->height;
-	if(height == s->capacity - 1)
-		return 1;
-	else if(height)
-		*(++(s->top)) = c;
-	else
-		*(s->top) = c;
-
-	++(s->height);
-	return 0;
-}
-
-char pop(Stack* s) {
-	char c = *(s->top);
-	*(s->top) = 0;
-	if(s->top > s->data) {
-		--s->top;
-		--(s->height);
-	} else
-		s->height = 0;
-	return c;
+void assign_char(void* dest, void* src) {
+	*((char*)dest) = *((char*)src);
 }
 
 char* postfix_fmt(char* exp) {
 	size_t l_exp = strlen(exp);
 
-	Stack stack;
-	stack.height = 0;
-	stack.capacity = l_exp + 1;
-	stack.data = (char*)calloc(stack.capacity, CHARSIZE);
-	stack.top = stack.data;
+	Stack stack = nStack(l_exp + 1, CHARSIZE);
 
 	char* buf = (char*)calloc((l_exp * 2) + 1, CHARSIZE);
 	int i = 0;
@@ -57,10 +25,13 @@ char* postfix_fmt(char* exp) {
 	inline void cleanup() {
 		free(prev_atoms);
 		free(buf);
-		free(stack.data);
+		dStack(&stack);
 	}
 
 	for(char* c = exp; *c; ++c) {
+		char tmp = 0;
+		void* p = (void*)(&tmp);
+
 		switch(*c) {
 			case '(':
 				if(n_atoms > 1) {
@@ -72,7 +43,7 @@ char* postfix_fmt(char* exp) {
 
 				n_atoms = 0;
 
-				pile(&stack, *c);
+				pile(&stack, (void*)c, assign_char);
 				break;
 
 			case '|':
@@ -82,10 +53,15 @@ char* postfix_fmt(char* exp) {
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = '&';
 
-				for(char top = peek(&stack); top != 0 && top != '('; top = peek(&stack))
-					buf[i++] = pop(&stack);
+				for(peek(&stack, p, assign_char);
+					tmp != 0 && tmp != '(';
+					peek(&stack, p, assign_char))
+				{
+					pop(&stack, (void*)(buf + (i++)), assign_char);
+				}
+				tmp = 0;
 
-				pile(&stack, *c);
+				pile(&stack, (void*)c, assign_char);
 				break;
 
 			case ')':
@@ -98,10 +74,15 @@ char* postfix_fmt(char* exp) {
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = '&';
 
-				for(char top = peek(&stack); top != 0 && top != '('; top = peek(&stack))
-					buf[i++] = pop(&stack);
+				for(peek(&stack, p, assign_char);
+					tmp != 0 && tmp != '(';
+					peek(&stack, p, assign_char))
+				{
+					pop(&stack, (void*)(buf + (i++)), assign_char);
+				}
+				tmp = 0;
 
-				pop(&stack);
+				pop(&stack, NULL, assign_char);
 
 				// remember to decrement the position in prev_atoms
 				n_atoms = prev_atoms[--j] + 1;
@@ -134,7 +115,10 @@ char* postfix_fmt(char* exp) {
 				buf[i++] = *c;
 				++n_atoms;
 				break;
+
 		}
+		// remeber to set tmp to 0
+		tmp = 0;
 	}
 
 	if(j != 0) {
@@ -146,8 +130,8 @@ char* postfix_fmt(char* exp) {
 	for(--n_atoms; n_atoms > 0; --n_atoms)
 		buf[i++] = '&';
 
-	while(stack.height > 0)
-		buf[i++] = pop(&stack);
+	while(stack.size > 0)
+		pop(&stack, (void*)(buf + (i++)), assign_char);
 
 	// remember to free post when done
 	char* post = (char*)calloc((strlen(buf) + 1), CHARSIZE);

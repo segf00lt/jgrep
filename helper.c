@@ -1,9 +1,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "helper.h"
 #include "const.h"
 
-inline size_t roundpow2(size_t n) {
+static inline size_t roundpow2(size_t n) {
 	size_t i = n;
 
 	i--;
@@ -17,6 +18,12 @@ inline size_t roundpow2(size_t n) {
 	size_t j = n >> 1;
 
 	return (i - n) > (n - j) ? j : i;
+}
+
+void* gmemcpy(void* dest, void* src, size_t n, void(*assign)(void*, void*)) {
+	for(size_t i = 0; i < n; ++i)
+		assign(dest + i, src + i);
+	return dest;
 }
 
 char* mystrcat(char* dest, char* src) {

@@ -7,19 +7,28 @@
  */
 
 /*
-typedef struct {
-	void* data;
-	void* top;
-	unsigned int max;
-	unsigned int size;
-} Stack;
-*/
+ * template for assign function:
+ *
+ * void assign_<type>(void* dest, void* src)
+ * {
+ * 	*((<type>*)dest) = *((<type>*)src);
+ * }
+ *
+ * template for mvtop function:
+ *
+ * void mvtop_<type>(Stack* s, int i)
+ * {
+ * 	s->top = (void*)((<type>*)(s->top) + i);
+ * }
+ */
 
-Stack nStack(int max, size_t TYPESIZE) {
+Stack nStack(int max, size_t TYPE, void(*mvtop)(Stack*, int), void(*assign)(void*, void*)) {
 	Stack s;
-	s.data = calloc(max, TYPESIZE);
+	s.data = calloc(max + 1, TYPE);
 	s.top = s.data;
-	s.nil = calloc(1, TYPESIZE);
+	s.nil = calloc(1, TYPE);
+	s.mvtop = mvtop;
+	s.assign = assign;
 	s.max = max;
 	s.size = 0;
 	return s;
@@ -30,61 +39,35 @@ void dStack(Stack* s) {
 	s->data = s->top = NULL;
 	free(s->nil);
 	s->nil = NULL;
+	s->mvtop = NULL;
+	s->assign = NULL;
 	s->max = s->size = 0;
 }
 
-/*
- * template for assign function:
- *
- * void assign_<type>(void* dest, void* src)
- * {
- * 	*((<type>*)dest) = *((<type>*)src);
- * }
- *
- */
-
 // put value at top of Stack s in dest
-void peek(Stack* s, void* dest, void(*assign)(void*, void*)) {
-	assign(dest, s->top);
+void peek(Stack* s, void* dest) {
+	s->assign(dest, s->top);
 }
 
 // add value at top of Stack
-void pile(Stack* s, void* src, void(*assign)(void*, void*)) {
-	int size = s->size;
-	if(size == s->max - 1)
+void pile(Stack* s, void* src) {
+	unsigned int size = s->size;
+	if(size == s->max)
 		return;
-	if(size)
-		assign(++(s->top), src);
-	else
-		assign(s->top, src);
+	if(size != 0)
+		s->mvtop(s, 1);
+	s->assign(s->top, src);
 	++(s->size);
 }
 
 // pop value off top of Stack and into dest
-void pop(Stack* s, void* dest, void(*assign)(void*, void*)) {
+void pop(Stack* s, void* dest) {
 	if(dest)
-		assign(dest, s->top);
-	assign(s->top, s->nil);
+		s->assign(dest, s->top);
+	s->assign(s->top, s->nil);
 	if(s->top > s->data) {
-		--(s->top);
+		s->mvtop(s, -1);
 		--(s->size);
 	} else
 		s->size = 0;
 }
-
-/*
-void assign_char(void* dest, void* src) {
-	*((char*)dest) = *((char*)src);
-}
-
-int main(void) {
-	Stack s = nStack(4, sizeof(char));
-	char c = 'a';
-	pile(&s, (void*)(&c), assign_char);
-	char k = 0;
-	peek(&s, (void*)(&k), assign_char);
-	printf("%c\n", k);
-	dStack(&s);
-	return 0;
-}
-*/

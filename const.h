@@ -1,4 +1,10 @@
+/*
+ * Useful constants
+ */
+
 #ifndef CONST_H
 #define CONST_H
-const size_t CHARSIZE = sizeof(char);
+
+#define CHARSIZE sizeof(char)
+
 #endif

@@ -84,8 +84,45 @@ paragraph in prefix notation would be `|&ab&ba`. Postfix may be slightly easier
 to evaluate though.
 
 #### Operators (in order of precedence)
-"*" any number of "+" one or more "?" at most one
+"\*" any number of "+" one or more "?" at most one
 "&" concatenation
 "(" begin group
 "|" alternation
 ")" end group
+
+### A note on `void` pointers
+
+GCC will allow you to do `void` pointer arithmetic, but it assumes the data
+being pointed to is the size of a `char` (1 byte). This behaviour caused quite
+a strange bug during the writing of the function `mk_nfa()`, which would cause
+a previous element of the stack to be overwritten with garbage whenever a new
+element was added with `pile()`.
+
+Why did this happen? My stack worked fine in `postfix_fmt()`, what was the
+difference now? The day after introducing this bug (and failing to fix it) I
+discovered the property of `void*` I mentioned before, and realized what my
+problem was. In `mk_nfa()`, the previously allocated elements of the stack were
+being partially overwritten with data from the new elements, because the
+`void*` pointing to the top of the stack was only being incremented by 1 byte,
+and not 24 bytes (the size of my `Frag` type). This obviously wouldn't affect
+the stack of `char`s from `postfix_fmt()` because the pointer was being
+"conveniently" incremented by the correct amount.
+
+So how did I fix it? Simple, add yet another special function just for properly
+incrementing or decrementing that pointer and pass it's address where I needed it.
+
+This wasn't perfect though, as it required me to pass yet another parameter to my
+`pile()` and `pop()` functions, so instead I added a pointer to the special function
+as a member of my stack structure, known as `void(*mvtop)(struct Stack*, int)`, which
+is only a mouthful to declare while calling it is as simple as saying
+`stack.mvtop(<params>)`. (I also added a pointer to the `assign()` function to the
+stack structure, see `stack.c` for more details).
+
+This new solution not only made the code run, but made all the calls to
+`peek()`, `pile()` and `pop()` way shorter.
+
+Another way would've been to add a member to the stack for storing the size of
+the type the stack holds, allowing one to properly increment or decrement the
+pointer. However, because `void` pointer arithmetic is prohibited by the C
+standard, and made illegal by all compilers which adhere to it, this wouldn't
+be a very portable solution.

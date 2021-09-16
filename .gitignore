@@ -3,3 +3,5 @@ scratch.py
 expand.c
 tags
 test.c
+stack.c
+stack.h

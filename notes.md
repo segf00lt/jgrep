@@ -83,6 +83,9 @@ Postfix, except operators precede operands. The regex from the previous
 paragraph in prefix notation would be `|&ab&ba`. Postfix may be slightly easier
 to evaluate though.
 
+**Tip**: An expression with n characters compiles to a NFA with k states, k
+being equal to n minus the number of parenthesis.
+
 #### Operators (in order of precedence)
 "\*" any number of "+" one or more "?" at most one
 "&" concatenation

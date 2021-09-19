@@ -168,6 +168,7 @@ typedef struct State {
 	char c;
 	struct State* out_0;
 	struct State* out_1;
+	int id;
 } State;
 
 State* nState(int t, char c, State* out_0, State* out_1) {
@@ -176,6 +177,7 @@ State* nState(int t, char c, State* out_0, State* out_1) {
 	s->c = c;
 	s->out_0 = out_0;
 	s->out_1 = out_1;
+	s->id = 0;
 	return s;
 }
 
@@ -185,14 +187,24 @@ typedef struct {
 	int l_out;
 } Frag;
 
-State match = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL };
+State match = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL, .id = 0 };
 
 void patch(State*** out, State* s, int l_out) {
 	for(int i = (l_out - 1); i >= 0; --i)
 		*(out[i]) = s;
 }
 
+/* store all states allocated to facilitate deallocation */
+State* all[MAX];
+int all_pos = 0;
+
 State* nfa_mk(char* post) {
+	if(!post)
+		return NULL;
+	/* zero initialize all[] */
+	for(int n = 0; n < MAX; ++n)
+		all[n] = NULL;
+
 	Frag stack[MAX];
 	int stackpos = 0;
 	int stacksize = 0;
@@ -219,6 +231,7 @@ State* nfa_mk(char* post) {
 		switch(*c) {
 			default:
 				s = nState(REG, *c, NULL, NULL);
+				all[all_pos++] = s;
 
 				o = (State***)malloc(sizeof(State**));
 				*o = &(s->out_0);
@@ -269,6 +282,7 @@ State* nfa_mk(char* post) {
 					--stackpos;
 
 				s = nState(SPLIT, 0, e1.start, e2.start);
+				all[all_pos++] = s;
 				o = (State***)calloc(e1.l_out + e2.l_out, sizeof(State**));
 
 				for(size_t l = 0; l < e1.l_out; ++l)
@@ -300,6 +314,7 @@ State* nfa_mk(char* post) {
 					--stackpos;
 
 				s = nState(SPLIT, 0, e1.start, NULL);
+				all[all_pos++] = s;
 
 				patch(e1.out, s, e1.l_out);
 				free(e1.out);
@@ -327,6 +342,7 @@ State* nfa_mk(char* post) {
 					--stackpos;
 
 				s = nState(SPLIT, 0, e1.start, NULL);
+				all[all_pos++] = s;
 
 				patch(e1.out, s, e1.l_out);
 				free(e1.out);
@@ -354,6 +370,7 @@ State* nfa_mk(char* post) {
 					--stackpos;
 
 				s = nState(SPLIT, 0, e1.start, NULL);
+				all[all_pos++] = s;
 
 				o = (State***)calloc(e1.l_out + 1, sizeof(State**));
 
@@ -389,16 +406,35 @@ State* nfa_mk(char* post) {
 	return e0.start;
 }
 
+void nfa_del(void) {
+	if(all_pos == 0)
+		return;
+	for(--all_pos; all_pos >= 0; --all_pos)
+		free(all[all_pos]);
+}
+
+int listid = 0;
+
+void addstate(State* s, State** l, int l_pos) {
+	if(s == NULL || s->id == listid)
+		return;
+	s->id = listid;
+
+	if(s->t == SPLIT) {
+		addstate(s->out_0, l, l_pos);
+		addstate(s->out_1, l, ++l_pos);
+		return;
+	}
+
+	l[l_pos] = s;
+}
+
 int main(int argc, char* argv[]) {
 	char* post = postfix_fmt(argv[1]);
-	printf("%s\n", post ? post : "");
+	if(post)
+		printf("%s\n", post);
 	State* nfa = nfa_mk(post);
-	free(nfa->out_1->out_0);
-	free(nfa->out_1->out_1);
-	free(nfa->out_1);
-	free(nfa->out_0);
-	free(nfa);
 	free(post);
-
+	nfa_del();
 	return 0;
 }

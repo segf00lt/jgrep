@@ -1,9 +1,50 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include "regex.h"
 
-/* max size for stacks and buffers */
-#define MAX 512
+/* globals for postfix_fmt() */
+char char_stack[MAX];
+char buf[MAX];
+int prev_atoms[MAX];
+
+/* globals for nfa_mk() */
+enum STATETYPE { REG, WILD, SPLIT, MATCH };
+Frag nilFrag = (Frag){ .start = NULL, .out = NULL, .l_out = 0 };
+State matchstate = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL, .id = 0 };
+Frag frag_stack[MAX];
+
+/* globals for match() */
+List clist, nlist, t;
+
+/* store all states allocated to facilitate deallocation */
+State* all[MAX];
+int all_pos = 0;
+
+/* zero initialize globals */
+void initglobal() {
+	for(int i = 0; i < MAX; ++i) {
+		char_stack[i] = buf[i] = '\000';
+		prev_atoms[i] = 0;
+
+		frag_stack[i] = nilFrag;
+
+		clist.s[i] = nlist.s[i] = t.s[i] = NULL;
+
+		all[i] = NULL;
+	}
+}
+
+
+/* free states */
+void nfa_del(void) {
+	if(all_pos == 0)
+		return;
+	for(--all_pos; all_pos >= 0; --all_pos)
+		free(all[all_pos]);
+}
+
 
 char* postfix_fmt(char* exp) {
 	size_t l_exp = strlen(exp);
@@ -15,24 +56,20 @@ char* postfix_fmt(char* exp) {
 		return NULL;
 	}
 
-	char stack[MAX];
+	/* position in char_stack */
 	int stackpos = 0;
+	/* size of char_stack */
 	int stacksize = 0;
 
-	char buf[MAX];
+	/* position in buf */
 	int i = 0;
 
 	int n_atoms = 0;
 
-	/* store values of n_atoms prior to entering a group */
-	int prev_atoms[MAX];
+	/* position in prev_atoms */
 	int j = 0;
 
-	/* zero initialize memory */
-	for(int n = 0; n < MAX; ++n) {
-		stack[n] = buf[n] = 0;
-		prev_atoms[n] = 0;
-	}
+	char nc = 0;
 
 	for(char* c = exp; *c; ++c) {
 		switch(*c) {
@@ -51,7 +88,7 @@ char* postfix_fmt(char* exp) {
 				else
 					stackpos = 0;
 
-				stack[stackpos] = *c;
+				char_stack[stackpos] = *c;
 				++stacksize;
 				break;
 
@@ -64,9 +101,10 @@ char* postfix_fmt(char* exp) {
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = '&';
 
-				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '('; --stacksize) {
-					buf[i++] = stack[stackpos];
-					stack[stackpos--] = 0;
+				for(; stacksize > 0 && stackpos >= 0 && char_stack[stackpos] != '('; --stacksize)
+				{
+					buf[i++] = char_stack[stackpos];
+					char_stack[stackpos--] = 0;
 				}
 
 				if(stacksize > 0)
@@ -74,7 +112,7 @@ char* postfix_fmt(char* exp) {
 				else
 					stackpos = 0;
 
-				stack[stackpos] = *c;
+				char_stack[stackpos] = *c;
 				++stacksize;
 				break;
 
@@ -87,16 +125,17 @@ char* postfix_fmt(char* exp) {
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = '&';
 
-				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '('; --stacksize) {
-					buf[i++] = stack[stackpos];
-					stack[stackpos--] = 0;
+				for(; stacksize > 0 && stackpos >= 0 && char_stack[stackpos] != '('; --stacksize)
+				{
+					buf[i++] = char_stack[stackpos];
+					char_stack[stackpos--] = 0;
 				}
 
 				if(stacksize == 0) {
 					stackpos = 0;
-					stack[stackpos] = 0;
+					char_stack[stackpos] = 0;
 				} else {
-					stack[stackpos--] = 0;
+					char_stack[stackpos--] = 0;
 					--stacksize;
 				}
 
@@ -127,6 +166,19 @@ char* postfix_fmt(char* exp) {
 				buf[i++] = *c;
 				break;
 
+			case '\\':
+				nc = *(c + 1);
+				if(nc == 0) {
+					fprintf(stderr, "error: lone escape operator\n");
+					return NULL;
+				} else if(nc == '.' || nc == '&' || nc == '\\')
+					buf[i++] = *c;
+				++c;
+
+				buf[i++] = *c;
+				++n_atoms;
+				break;
+
 			default:
 				if(n_atoms > 1) {
 					--n_atoms;
@@ -149,8 +201,8 @@ char* postfix_fmt(char* exp) {
 		buf[i++] = '&';
 
 	for(; stacksize > 0; --stacksize) {
-		buf[i++] = stack[stackpos];
-		stack[stackpos--] = 0;
+		buf[i++] = char_stack[stackpos];
+		char_stack[stackpos--] = 0;
 	}
 
 	/* remember to free post when done */
@@ -160,16 +212,6 @@ char* postfix_fmt(char* exp) {
 	return post;
 }
 
-
-enum STATETYPE { REG, SPLIT, MATCH };
-
-typedef struct State {
-	int t;
-	char c;
-	struct State* out_0;
-	struct State* out_1;
-	int id;
-} State;
 
 State* nState(int t, char c, State* out_0, State* out_1) {
 	State* s = (State*)malloc(sizeof(State));
@@ -181,38 +223,23 @@ State* nState(int t, char c, State* out_0, State* out_1) {
 	return s;
 }
 
-typedef struct {
-	State* start;
-	State*** out;
-	int l_out;
-} Frag;
-
-State match = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL, .id = 0 };
-
 void patch(State*** out, State* s, int l_out) {
 	for(int i = (l_out - 1); i >= 0; --i)
 		*(out[i]) = s;
 }
 
-/* store all states allocated to facilitate deallocation */
-State* all[MAX];
-int all_pos = 0;
-
 State* nfa_mk(char* post) {
 	if(!post)
 		return NULL;
-	/* zero initialize all[] */
-	for(int n = 0; n < MAX; ++n)
-		all[n] = NULL;
 
-	Frag stack[MAX];
+	/* position in frag_stack */
 	int stackpos = 0;
+	/* size of frag_stack */
 	int stacksize = 0;
 
 	/* make temporary variables */
 	State* s = NULL;
 	State*** o = NULL;
-	Frag nilFrag = (Frag){ .start = NULL, .out = NULL, .l_out = 0 };
 	Frag frag, e0, e1, e2;
 	frag = e0 = e1 = e2 = nilFrag;
 
@@ -223,12 +250,11 @@ State* nfa_mk(char* post) {
 		frag = e0 = e1 = e2 = nilFrag;
 	}
 
-	/* zero initialize stack */
-	for(int n = 0; n < MAX; ++n)
-		stack[n] = nilFrag;
-
 	for(char*c = post; *c; ++c) {
 		switch(*c) {
+			case '\\':
+				++c;
+
 			default:
 				s = nState(REG, *c, NULL, NULL);
 				all[all_pos++] = s;
@@ -241,17 +267,35 @@ State* nfa_mk(char* post) {
 				if(stacksize > 0)
 					++stackpos;
 
-				stack[stackpos] = frag;
+				frag_stack[stackpos] = frag;
+				++stacksize;
+
+				cleartmp();
+				break;
+
+			case '.':
+				s = nState(WILD, 0, NULL, NULL);
+				all[all_pos++] = s;
+
+				o = (State***)malloc(sizeof(State**));
+				*o = &(s->out_0);
+
+				frag = (Frag){ .start = s, .out = o, .l_out = 1 };
+
+				if(stacksize > 0)
+					++stackpos;
+
+				frag_stack[stackpos] = frag;
 				++stacksize;
 
 				cleartmp();
 				break;
 
 			case '&':
-				e2 = stack[stackpos];
-				stack[stackpos--] = nilFrag;
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
+				e2 = frag_stack[stackpos];
+				frag_stack[stackpos--] = nilFrag;
+				e1 = frag_stack[stackpos];
+				frag_stack[stackpos] = nilFrag;
 				stacksize -= 2;
 
 				if(stacksize > 0)
@@ -265,17 +309,17 @@ State* nfa_mk(char* post) {
 				if(stacksize > 0)
 					++stackpos;
 
-				stack[stackpos] = frag;
+				frag_stack[stackpos] = frag;
 				++stacksize;
 
 				cleartmp();
 				break;
 
 			case '|':
-				e2 = stack[stackpos];
-				stack[stackpos--] = nilFrag;
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
+				e2 = frag_stack[stackpos];
+				frag_stack[stackpos--] = nilFrag;
+				e1 = frag_stack[stackpos];
+				frag_stack[stackpos] = nilFrag;
 				stacksize -= 2;
 
 				if(stacksize > 0)
@@ -299,15 +343,15 @@ State* nfa_mk(char* post) {
 				if(stacksize > 0)
 					++stackpos;
 
-				stack[stackpos] = frag;
+				frag_stack[stackpos] = frag;
 				++stacksize;
 
 				cleartmp();
 				break;
 
 			case '*':
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
+				e1 = frag_stack[stackpos];
+				frag_stack[stackpos] = nilFrag;
 				--stacksize;
 
 				if(stacksize > 0)
@@ -327,15 +371,15 @@ State* nfa_mk(char* post) {
 				if(stacksize > 0)
 					++stackpos;
 
-				stack[stackpos] = frag;
+				frag_stack[stackpos] = frag;
 				++stacksize;
 
 				cleartmp();
 				break;
 
 			case '+':
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
+				e1 = frag_stack[stackpos];
+				frag_stack[stackpos] = nilFrag;
 				--stacksize;
 
 				if(stacksize > 0)
@@ -355,15 +399,15 @@ State* nfa_mk(char* post) {
 				if(stacksize > 0)
 					++stackpos;
 
-				stack[stackpos] = frag;
+				frag_stack[stackpos] = frag;
 				++stacksize;
 
 				cleartmp();
 				break;
 
 			case '?':
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
+				e1 = frag_stack[stackpos];
+				frag_stack[stackpos] = nilFrag;
 				--stacksize;
 
 				if(stacksize > 0)
@@ -386,7 +430,7 @@ State* nfa_mk(char* post) {
 				if(stacksize > 0)
 					++stackpos;
 
-				stack[stackpos] = frag;
+				frag_stack[stackpos] = frag;
 				++stacksize;
 
 				cleartmp();
@@ -395,46 +439,79 @@ State* nfa_mk(char* post) {
 	}
 	cleartmp();
 
-	e0 = stack[stackpos];
-	stack[stackpos] = nilFrag;
+	e0 = frag_stack[stackpos];
+	frag_stack[stackpos] = nilFrag;
 	--stacksize;
 
-	patch(e0.out, &match, e0.l_out);
+	patch(e0.out, &matchstate, e0.l_out);
 
 	free(e0.out);
 
 	return e0.start;
 }
 
-void nfa_del(void) {
-	if(all_pos == 0)
-		return;
-	for(--all_pos; all_pos >= 0; --all_pos)
-		free(all[all_pos]);
-}
 
 int listid = 0;
 
-void addstate(State* s, State** l, int l_pos) {
+void addstate(State* s, List* l) {
 	if(s == NULL || s->id == listid)
 		return;
 	s->id = listid;
 
 	if(s->t == SPLIT) {
-		addstate(s->out_0, l, l_pos);
-		addstate(s->out_1, l, ++l_pos);
+		addstate(s->out_0, l);
+		addstate(s->out_1, l);
 		return;
 	}
 
-	l[l_pos] = s;
+	l->s[l->n++] = s;
+}
+
+void step(List* clist, List* nlist, char c) {
+	State* s;
+	nlist->n = 0;
+	++listid;
+
+	for(int i = 0; i < clist->n; ++i) {
+		s = clist->s[i];
+		if(s->c == c || s->t == WILD)
+			addstate(s->out_0, nlist);
+	}
+}
+
+int match(State* start, char* str) {
+	clist.n = nlist.n = 0;
+
+	++listid;
+	addstate(start, &clist);
+
+	for(; *str; ++str) {
+		step(&clist, &nlist, *str);
+		t = clist;
+		clist = nlist;
+		nlist = t;
+	}
+
+	int ismatch = 0;
+	for(int i = 0; i < clist.n; ++i) {
+		if(clist.s[i] == &matchstate) {
+			ismatch = 1;
+			break;
+		}
+	}
+
+	return ismatch;
 }
 
 int main(int argc, char* argv[]) {
+	initglobal();
 	char* post = postfix_fmt(argv[1]);
 	if(post)
 		printf("%s\n", post);
 	State* nfa = nfa_mk(post);
 	free(post);
+	int res = match(nfa, argv[2]);
+	printf("%s\n", res ? "match" : "no match");
 	nfa_del();
 	return 0;
 }

@@ -29,11 +29,12 @@ typedef struct {
 
 void initglobal();
 void nfa_del(void);
+char* crange(char f, char t);
 char* postfix_fmt(char* exp);
 void patch(State*** out, State* s, int l_out);
 State* nfa_mk(char* post);
+State* recomp(char* exp);
 void addstate(State* s, List* l);
-void step(List* clist, List* nlist, char c);
-int match(State* start, char* str);
+int rematch(State* start, char* str);
 
 #endif

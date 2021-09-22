@@ -16,7 +16,7 @@ struct Prev {
 
 struct Prev prev[MAX];
 
-enum STATETYPE { REG, WILD, SPLIT, MATCH };
+enum STATETYPE { REG, WILD, UPPER, LOWER, NUM, SPLIT, MATCH };
 Frag nilFrag = (Frag){ .start = NULL, .out = NULL, .l_out = 0 };
 State matchstate = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL, .id = 0 };
 Frag frag_stack[MAX];
@@ -51,14 +51,29 @@ void nfa_del(void) {
 }
 
 
+char* crange(char f, char t) {
+	int l = t - f;
+	if(l == 0) return "\0";
+
+	char* s = (char*)calloc(l + 2, sizeof(char));
+	char* pos = s;
+
+	if(l > 0)
+		for(char c = f++; c <= t;*(pos++) = c++);
+	else
+		for(char c = f--; c >= t;*(pos++) = c--);
+
+	return s;
+}
+
 char* postfix_fmt(char* exp) {
 	size_t l_exp = strlen(exp);
 	if(!l_exp) {
 		fprintf(stderr, "error: empty expression\n");
-		return NULL;
+		exit(1);
 	} else if(l_exp > MAX) {
 		fprintf(stderr, "error: expression too large\n");
-		return NULL;
+		exit(1);
 	}
 
 	/* position in char_stack */
@@ -76,6 +91,7 @@ char* postfix_fmt(char* exp) {
 
 	char baseop = '&';
 
+	char pc = 0;
 	char nc = 0;
 
 	for(char* c = exp; *c; ++c) {
@@ -107,7 +123,7 @@ char* postfix_fmt(char* exp) {
 			case '|':
 				if(n_atoms == 0) {
 					fprintf(stderr, "error: lone or incomplete alternation");
-					return NULL;
+					exit(1);
 				}
 
 				for(--n_atoms; n_atoms > 0; --n_atoms)
@@ -134,7 +150,7 @@ char* postfix_fmt(char* exp) {
 
 				if(j == 0 || n_atoms == 0) {
 					fprintf(stderr, "error: mismatched or empty parentheses\n");
-					return NULL;
+					exit(1);
 				}
 
 				for(--n_atoms; n_atoms > 0; --n_atoms)
@@ -180,12 +196,49 @@ char* postfix_fmt(char* exp) {
 				break;
 
 			case '-':
+				pc = *(c - 1);
+				nc = *(c + 1);
+
+				if(baseop == '&') {
+					if(n_atoms > 1) {
+						--n_atoms;
+						buf[i++] = baseop;
+					}
+
+					buf[i++] = '\\';
+					buf[i++] = *c;
+					++n_atoms;
+					break;
+				}
+
+				if(pc > nc) {
+					fprintf(stderr, "error: invalid range end\n");
+					exit(1);
+				}
+
+				if(pc == 'a' && nc == 'z' || pc == 'A' && nc == 'Z' || pc == '0' && nc == '9')
+				{
+					buf[i - 1] = *c;
+					buf[i++] = pc;
+				} else {
+					char* tmp = crange(pc + 1, nc);
+					for(char* pos = tmp; *pos != 0; ++pos) {
+						if(*pos == '\\')
+							buf[i++] = '\\';
+						buf[i++] = *pos;
+						buf[i++] = '|';
+					}
+					free(tmp);
+				}
+
+				++c;
+
 				break;
 
 			case ']':
 				if(j == 0 || n_atoms == 0) {
 					fprintf(stderr, "error: mismatched or empty square brackets\n");
-					return NULL;
+					exit(1);
 				}
 
 				for(--n_atoms; n_atoms > 0; --n_atoms)
@@ -212,7 +265,7 @@ char* postfix_fmt(char* exp) {
 			case '*':
 				if(n_atoms == 0) {
 					fprintf(stderr, "error: lone repetition operator\n");
-					return NULL;
+					exit(1);
 				}
 				buf[i++] = *c;
 				break;
@@ -220,7 +273,7 @@ char* postfix_fmt(char* exp) {
 			case '+':
 				if(n_atoms == 0) {
 					fprintf(stderr, "error: lone repetition operator\n");
-					return NULL;
+					exit(1);
 				}
 				buf[i++] = *c;
 				break;
@@ -228,7 +281,7 @@ char* postfix_fmt(char* exp) {
 			case '?':
 				if(n_atoms == 0) {
 					fprintf(stderr, "error: lone repetition operator\n");
-					return NULL;
+					exit(1);
 				}
 				buf[i++] = *c;
 				break;
@@ -242,7 +295,7 @@ char* postfix_fmt(char* exp) {
 				nc = *(c + 1);
 				if(nc == 0) {
 					fprintf(stderr, "error: lone escape operator\n");
-					return NULL;
+					exit(1);
 				} else if(nc == '.' || nc == '&' || nc == '\\')
 					buf[i++] = *c;
 				++c;
@@ -266,7 +319,7 @@ char* postfix_fmt(char* exp) {
 
 	if(j != 0) {
 		fprintf(stderr, "error: mismatched parentheses or square brackets\n");
-		return NULL;
+		exit(1);
 	}
 
 	for(--n_atoms; n_atoms > 0; --n_atoms)
@@ -297,8 +350,10 @@ void patch(State*** out, State* s, int l_out) {
 }
 
 State* nfa_mk(char* post) {
-	if(!post)
-		return NULL;
+	if(!post) {
+		fprintf(stderr, "error: empty postfix expression\n");
+		exit(1);
+	}
 
 	/* position in frag_stack */
 	int stackpos = 0;
@@ -310,12 +365,14 @@ State* nfa_mk(char* post) {
 	State*** o = NULL;
 	Frag frag, e0, e1, e2;
 	frag = e0 = e1 = e2 = nilFrag;
+	int t = 0;
 
 	/* clear temporary variables */
 	inline void cleartmp() {
 		s = NULL;
 		o = NULL;
 		frag = e0 = e1 = e2 = nilFrag;
+		t = 0;
 	}
 
 	for(char*c = post; *c; ++c) {
@@ -337,6 +394,38 @@ State* nfa_mk(char* post) {
 
 				frag_stack[stackpos] = frag;
 				++stacksize;
+
+				cleartmp();
+				break;
+
+			case '-':
+				switch(*(c + 1)) {
+					case 'A':
+						t = UPPER;
+						break;
+					case 'a':
+						t = LOWER;
+						break;
+					case '0':
+						t = NUM;
+						break;
+				}
+
+				s = nState(t, 0, NULL, NULL);
+				all[all_pos++] = s;
+
+				o = (State***)malloc(sizeof(State**));
+				*o = &(s->out_0);
+
+				frag = (Frag){ .start = s, .out = o, .l_out = 1 };
+
+				if(stacksize > 0)
+					++stackpos;
+
+				frag_stack[stackpos] = frag;
+				++stacksize;
+
+				++c;
 
 				cleartmp();
 				break;
@@ -518,6 +607,14 @@ State* nfa_mk(char* post) {
 	return e0.start;
 }
 
+State* recomp(char* exp) {
+	initglobal();
+	char* post = postfix_fmt(exp);
+	State* nfa = nfa_mk(post);
+	atexit(nfa_del);
+	return nfa;
+}
+
 
 int listid = 0;
 
@@ -535,26 +632,31 @@ void addstate(State* s, List* l) {
 	l->s[l->n++] = s;
 }
 
-void step(List* clist, List* nlist, char c) {
-	State* s;
-	nlist->n = 0;
-	++listid;
-
-	for(int i = 0; i < clist->n; ++i) {
-		s = clist->s[i];
-		if(s->c == c || s->t == WILD)
-			addstate(s->out_0, nlist);
-	}
-}
-
-int match(State* start, char* str) {
+int rematch(State* start, char* str) {
 	clist.n = nlist.n = 0;
 
 	++listid;
 	addstate(start, &clist);
 
 	for(; *str; ++str) {
-		step(&clist, &nlist, *str);
+		char c = *str;
+		State* s;
+		nlist.n = 0;
+		++listid;
+
+		/* step each state in clist to it's next state if c is matched */
+		for(int i = 0; i < clist.n; ++i) {
+			s = clist.s[i];
+			if(
+			(s->c == c) ||
+			(s->t == WILD) ||
+			(s->t == UPPER && isupper(c)) ||
+			(s->t == LOWER && islower(c)) ||
+			(s->t == NUM && isdigit(c))
+			)
+				addstate(s->out_0, &nlist);
+		}
+
 		t = clist;
 		clist = nlist;
 		nlist = t;
@@ -572,6 +674,10 @@ int match(State* start, char* str) {
 }
 
 int main(int argc, char* argv[]) {
+	State* regexp = recomp(argv[1]);
+	int res = rematch(regexp, argv[2]);
+	printf("%s\n", res ? "match" : "no match");
+	/*
 	initglobal();
 	char* post = postfix_fmt(argv[1]);
 	if(post)
@@ -580,5 +686,6 @@ int main(int argc, char* argv[]) {
 	int res = match(nfa, argv[2]);
 	printf("%s\n", res ? "match" : "no match");
 	nfa_del();
+	*/
 	return 0;
 }

@@ -4,18 +4,23 @@
 #include <ctype.h>
 #include "regex.h"
 
-/* globals for postfix_fmt() */
+/* global variables */
 char char_stack[MAX];
 char buf[MAX];
-int prev_atoms[MAX];
 
-/* globals for nfa_mk() */
+/* store locals prior to entering group or class */
+struct Prev {
+	int atoms;
+	char baseop;
+};
+
+struct Prev prev[MAX];
+
 enum STATETYPE { REG, WILD, SPLIT, MATCH };
 Frag nilFrag = (Frag){ .start = NULL, .out = NULL, .l_out = 0 };
 State matchstate = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL, .id = 0 };
 Frag frag_stack[MAX];
 
-/* globals for match() */
 List clist, nlist, t;
 
 /* store all states allocated to facilitate deallocation */
@@ -26,7 +31,7 @@ int all_pos = 0;
 void initglobal() {
 	for(int i = 0; i < MAX; ++i) {
 		char_stack[i] = buf[i] = '\000';
-		prev_atoms[i] = 0;
+		prev[i] = (struct Prev){ .atoms = 0, .baseop = 0 };
 
 		frag_stack[i] = nilFrag;
 
@@ -66,21 +71,28 @@ char* postfix_fmt(char* exp) {
 
 	int n_atoms = 0;
 
-	/* position in prev_atoms */
+	/* position in prev */
 	int j = 0;
+
+	char baseop = '&';
 
 	char nc = 0;
 
 	for(char* c = exp; *c; ++c) {
 		switch(*c) {
 			case '(':
+				if(baseop == '|')
+					break;
+
 				if(n_atoms > 1) {
-					buf[i++] = '&';
+					buf[i++] = baseop;
 					--n_atoms;
 				}
 
-				prev_atoms[j++] = n_atoms;
+				prev[j].baseop = baseop;
+				prev[j++].atoms = n_atoms;
 
+				baseop = '&';
 				n_atoms = 0;
 
 				if(stacksize > 0)
@@ -117,6 +129,9 @@ char* postfix_fmt(char* exp) {
 				break;
 
 			case ')':
+				if(baseop == '|')
+					break;
+
 				if(j == 0 || n_atoms == 0) {
 					fprintf(stderr, "error: mismatched or empty parentheses\n");
 					return NULL;
@@ -139,7 +154,59 @@ char* postfix_fmt(char* exp) {
 					--stacksize;
 				}
 
-				n_atoms = prev_atoms[--j] + 1;
+				baseop = prev[--j].baseop;
+				n_atoms = prev[j].atoms + 1;
+				break;
+
+			case '[':
+				if(n_atoms > 1) {
+					buf[i++] = baseop;
+					--n_atoms;
+				}
+
+				prev[j].baseop = baseop;
+				prev[j++].atoms = n_atoms;
+
+				baseop = '|';
+				n_atoms = 0;
+
+				if(stacksize > 0)
+					++stackpos;
+				else
+					stackpos = 0;
+
+				char_stack[stackpos] = *c;
+				++stacksize;
+				break;
+
+			case '-':
+				break;
+
+			case ']':
+				if(j == 0 || n_atoms == 0) {
+					fprintf(stderr, "error: mismatched or empty square brackets\n");
+					return NULL;
+				}
+
+				for(--n_atoms; n_atoms > 0; --n_atoms)
+					buf[i++] = '|';
+
+				for(; stacksize > 0 && stackpos >= 0 && char_stack[stackpos] != '['; --stacksize)
+				{
+					buf[i++] = char_stack[stackpos];
+					char_stack[stackpos--] = 0;
+				}
+
+				if(stacksize == 0) {
+					stackpos = 0;
+					char_stack[stackpos] = 0;
+				} else {
+					char_stack[stackpos--] = 0;
+					--stacksize;
+				}
+
+				baseop = prev[--j].baseop;
+				n_atoms = prev[j].atoms + 1;
 				break;
 
 			case '*':
@@ -167,6 +234,11 @@ char* postfix_fmt(char* exp) {
 				break;
 
 			case '\\':
+				if(n_atoms > 1) {
+					--n_atoms;
+					buf[i++] = baseop;
+				}
+
 				nc = *(c + 1);
 				if(nc == 0) {
 					fprintf(stderr, "error: lone escape operator\n");
@@ -182,7 +254,7 @@ char* postfix_fmt(char* exp) {
 			default:
 				if(n_atoms > 1) {
 					--n_atoms;
-					buf[i++] = '&';
+					buf[i++] = baseop;
 				}
 
 				buf[i++] = *c;
@@ -193,7 +265,7 @@ char* postfix_fmt(char* exp) {
 	}
 
 	if(j != 0) {
-		fprintf(stderr, "error: mismatched parentheses\n");
+		fprintf(stderr, "error: mismatched parentheses or square brackets\n");
 		return NULL;
 	}
 
@@ -205,11 +277,7 @@ char* postfix_fmt(char* exp) {
 		char_stack[stackpos--] = 0;
 	}
 
-	/* remember to free post when done */
-	char* post = (char*)calloc((strlen(buf) + 1), sizeof(char));
-	strcpy(post, buf);
-
-	return post;
+	return buf;
 }
 
 
@@ -509,7 +577,6 @@ int main(int argc, char* argv[]) {
 	if(post)
 		printf("%s\n", post);
 	State* nfa = nfa_mk(post);
-	free(post);
 	int res = match(nfa, argv[2]);
 	printf("%s\n", res ? "match" : "no match");
 	nfa_del();

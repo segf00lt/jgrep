@@ -27,7 +27,6 @@ List clist, nlist, t;
 State* all[MAX];
 int all_pos = 0;
 
-/* zero initialize globals */
 void initglobal() {
 	for(int i = 0; i < MAX; ++i) {
 		char_stack[i] = buf[i] = '\000';
@@ -42,7 +41,6 @@ void initglobal() {
 }
 
 
-/* free states */
 void nfa_del(void) {
 	if(all_pos == 0)
 		return;
@@ -53,7 +51,7 @@ void nfa_del(void) {
 
 char* crange(char f, char t) {
 	int l = t - f;
-	if(l == 0) return "\0";
+	if(l == 0) return "\000";
 
 	char* s = (char*)calloc(l + 2, sizeof(char));
 	char* pos = s;
@@ -222,9 +220,11 @@ char* postfix_fmt(char* exp) {
 					buf[i++] = pc;
 				} else {
 					char* tmp = crange(pc + 1, nc);
+					buf[--i] = '\\';
+					buf[++i] = pc;
+					++i;
 					for(char* pos = tmp; *pos != 0; ++pos) {
-						if(*pos == '\\')
-							buf[i++] = '\\';
+						buf[i++] = '\\';
 						buf[i++] = *pos;
 						buf[i++] = '|';
 					}
@@ -610,6 +610,8 @@ State* nfa_mk(char* post) {
 State* recomp(char* exp) {
 	initglobal();
 	char* post = postfix_fmt(exp);
+	if(post)
+		printf("%s\n", post);
 	State* nfa = nfa_mk(post);
 	atexit(nfa_del);
 	return nfa;

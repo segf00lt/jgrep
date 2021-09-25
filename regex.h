@@ -27,14 +27,17 @@ typedef struct {
 	int n;
 } List;
 
+typedef State* regex_t;
+
 void initglobal();
-void nfa_del(void);
 char* crange(char f, char t);
 char* postfix_fmt(char* exp);
 void patch(State*** out, State* s, int l_out);
 State* nfa_mk(char* post);
-State* recomp(char* exp);
+void nfa_del(void);
+regex_t recomp(char* exp);
 void addstate(State* s, List* l);
-int rematch(State* start, char* str);
+int rematch(regex_t start, char* str);
+int rematchsub(State* start, char* str);
 
 #endif

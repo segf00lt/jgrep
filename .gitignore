@@ -8,3 +8,4 @@ stack.h
 helper.c
 helper.h
 const.h
+*.vim

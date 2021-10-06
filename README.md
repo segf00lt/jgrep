@@ -3,4 +3,4 @@
 A grep implementation written for practice
 
 ## TODO
-- Start writing `jgrep`
+- Write C implementation of `testing/regex.py`

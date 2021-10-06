@@ -37,7 +37,7 @@ special characters, which must be escaped with `\`
 `()` Capture group
 
 
-## Implementation (Finite Automata)
+## Implementation: Finite Automata
 
 ### Description as FA or NFA
 
@@ -129,3 +129,19 @@ the type the stack holds, allowing one to properly increment or decrement the
 pointer. However, because `void` pointer arithmetic is prohibited by the C
 standard, and made illegal by all compilers which adhere to it, this wouldn't
 be a very portable solution.
+
+## Implementation: Virtual Machine
+
+Having written the NFA implementation, I quickly wrote a basic version of
+`grep` and tested it on some files. This made me realize that my match function
+can't match a substring of the string it's given (like `grep` would), and so I
+tried writing a new one. This attempt and the few that followed failed, and it
+turns out the only way to successfully do substring or "unanchored" matching,
+is by trying to match starting from index 0, then 1, 2, 3 etc. adding up to
+O(n<sup>2</sup>) time complexity. So yeah, it's slow. But, there's another way.
+
+Our first implementation was essentially a way of representing the Finite
+Automata diagrams in code. The new implementation will be bytecode
+for a virtual machine. This VM will be our match function. As of the time of writing
+this section, I have just finished I prototype of this implementation in python stored
+in `testing/regex.py`.

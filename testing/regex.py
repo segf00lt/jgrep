@@ -89,6 +89,11 @@ def parse(exp) -> str:
             if baseop != '&':
                 print("error: mismatched square brackets")
                 quit()
+
+            if n_atoms > 1:
+                n_atoms -= 1
+                post += baseop
+
             post += c
             prev_atoms.append(n_atoms)
             n_atoms = 0
@@ -115,7 +120,7 @@ def parse(exp) -> str:
                 print("error: invalid range")
                 quit()
 
-            cr = [f"\\{chr(c)}" if c >= 91 and c <= 92 else chr(c) for c in range(ord(pc) + 1, ord(nc))]
+            cr = [f"\\{chr(c)}" if c >= 91 and c <= 93 else chr(c) for c in range(ord(pc) + 1, ord(nc))]
             post += "".join(cr)
             i += 1
 
@@ -162,10 +167,10 @@ def parse(exp) -> str:
             nc = exp[i + 1]
             if nc in ".(|)[-]*+?&^$\\":
                 post += c
-                post += nc
                 i += 1
                 n_atoms += 1
 
+            post += nc
             i += 1
             continue
 
@@ -197,9 +202,9 @@ def parse(exp) -> str:
 
     return post
 
-def comp(post) -> str:
+def assemble(post) -> str:
     if post == None:
-        print("error: comp: empty input string")
+        print("error: assemble: empty input string")
         quit()
 
     prog = ""
@@ -291,13 +296,14 @@ def comp(post) -> str:
 
 def match(re, s, sub=False) -> bool:
     if sub:
-        subre = comp(".*")
+        subre = assemble(".*")
         subre = subre[:6]
         re = subre + re[:len(re) - 1] + subre + chr(OPCODE.MATCH.value)
     clist = []
     nlist = []
     pc = 0
     sp = 0
+    s += '\0'
 
     clist.append(pc)
     while(sp < len(s)):
@@ -382,5 +388,6 @@ def match(re, s, sub=False) -> bool:
 
 if __name__ == '__main__':
     post = parse(argv[1])
-    re = comp(post)
+    print(post)
+    re = assemble(post)
     print(match(re, argv[2], True))

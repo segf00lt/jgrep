@@ -17,6 +17,26 @@ enum OPCODES {
 	MATCH = 11,
 };
 
+enum INSTLENS {
+	CHARLEN = 2,
+	WILDLEN = 1,
+	JUMPLEN = 3,
+	BACKLEN = 3,
+	ALTLEN = 5,
+	CLASSLEN = 3,
+	BLINELEN = 1,
+	ELINELEN = 1,
+	MATCHLEN = 1,
+};
+
+enum OFFSETS {
+	OP = 0,
+	DATA = 1,
+	NEXT = 2,
+	ARROW_0 = 1,
+	ARROW_1 = 3,
+};
+
 typedef struct {
 	char* bin;
 	unsigned int len;
@@ -31,6 +51,15 @@ void cacheinit(void) {
 		cache1[i] = cache2[i] = 0;
 		cache3[i] = (regex_t){ .bin = NULL, .len = 0 };
 	}
+}
+
+/* store all compiled expressions */
+char* all[MAX];
+int all_pos = 0;
+
+void reclear(void) {
+	for(int i = 0; i <= all_pos; ++i)
+		free(all[i]);
 }
 
 char* parse(char* exp) {
@@ -314,6 +343,37 @@ regex_t progcat(regex_t f1, regex_t f2) {
 	return f0;
 }
 
+/* getnum() and setnum() allow treatment of two adjacent chars as one 2 byte number */
+void setnum(char* c, int n) {
+	c[0] = n ^ 256;
+	c[1] = n >> 8;
+}
+
+int getnum(char* c) {
+	int n = 0;
+	n |= c[0];
+	n |= c[1] << 8;
+	return n;
+}
+
+void pilefrag(regex_t frag, regex_t* stack, int* stacksize, int* stackpos) {
+	if(*stacksize > 0)
+		++(*stackpos);
+	++(*stacksize);
+	stack[*stackpos] = frag;
+}
+	
+regex_t popfrag(regex_t* stack, int* stacksize, int* stackpos) {
+	regex_t frag = stack[*stackpos];
+	stack[*stackpos] = (regex_t){ .bin = NULL, .len = 0 };
+	if(*stacksize > 1) {
+		--(*stackpos);
+		--(*stacksize);
+	} else
+		*stackpos = *stacksize = 0;
+	return frag;
+}
+
 regex_t generate(char* post) {
 	regex_t nilfrag = (regex_t){ .bin = NULL, .len = 0 };
 	regex_t prog = nilfrag;
@@ -321,174 +381,123 @@ regex_t generate(char* post) {
 	regex_t frag1 = nilfrag;
 	regex_t frag2 = nilfrag;
 	regex_t tmp = nilfrag;
-	char c1 = 0;
-	char c2 = 0;
 	regex_t* stack = cache3;
 	int stackpos = 0;
 	int stacksize = 0;
-	
-	inline void pile(regex_t frag) {
-		if(stacksize > 0)
-			++stackpos;
-		++stacksize;
-		stack[stackpos] = frag;
-	}
-	
-	inline regex_t pop(void) {
-		regex_t frag = stack[stackpos];
-		stack[stackpos] = nilfrag;
-		if(stacksize > 1) {
-			--stackpos;
-			--stacksize;
-		} else
-			stackpos = stacksize = 0;
-		return frag;
-	}
 
 	for(char* c = post; *c; ++c) {
 		tmp = frag0 = frag1 = frag2 = nilfrag;
 		switch(*c) {
 			case '\\':
 				++c;
-				frag0.len = 2;
+				frag0.len = CHARLEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = CHAR;
-				frag0.bin[1] = *c;
-				pile(frag0);
+				frag0.bin[OP] = CHAR;
+				frag0.bin[DATA] = *c;
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '^':
-				frag0.len = 1;
+				frag0.len = BLINELEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = BLINE;
-				pile(frag0);
+				frag0.bin[OP] = BLINE;
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '$':
-				frag0.len = 1;
+				frag0.len = ELINELEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = ELINE;
-				pile(frag0);
+				frag0.bin[OP] = ELINE;
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '|':
-				frag2 = pop();
-				frag1 = pop();
+				frag2 = popfrag(stack, &stacksize, &stackpos);
+				frag1 = popfrag(stack, &stacksize, &stackpos);
 
-				tmp.len = 3;
+				tmp.len = JUMPLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
-				tmp.bin[0] = JUMP;
-				c1 = (frag2.len + 2) ^ 256;
-				c2 = (frag2.len + 2) >> 8;
-				tmp.bin[1] = c1;
-				tmp.bin[2] = c2;
-				c1 = c2 = 0;
+				tmp.bin[OP] = JUMP;
+				setnum(tmp.bin + ARROW_0, frag2.len + 2);
 
 				frag1 = progcat(frag1, tmp);
 				tmp = nilfrag;
 
-				frag0.len = 5;
+				frag0.len = ALTLEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = ALT;
-				frag0.bin[1] = 4;
-				frag0.bin[2] = 0;
-				c1 = (frag1.len + 2) ^ 256;
-				c2 = (frag1.len + 2) >> 8;
-				frag0.bin[3] = c1;
-				frag0.bin[4] = c2;
-				c1 = c2 = 0;
+				frag0.bin[OP] = ALT;
+				setnum(frag0.bin + ARROW_0, 4);
+				setnum(frag0.bin + ARROW_1, frag1.len + 2);
 
 				frag0 = progcat(frag0, frag1);
 				frag0 = progcat(frag0, frag2);
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '?':
-				frag0 = pop();
+				frag0 = popfrag(stack, &stacksize, &stackpos);
 
-				tmp.len = 5;
+				tmp.len = ALTLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
-				tmp.bin[0] = ALT;
-				tmp.bin[1] = 4;
-				tmp.bin[2] = 0;
-				c1 = (frag0.len + 2) ^ 256;
-				c2 = (frag0.len + 2) >> 8;
-				tmp.bin[3] = c1;
-				tmp.bin[4] = c2;
+				tmp.bin[OP] = ALT;
+				setnum(tmp.bin + ARROW_0, 4);
+				setnum(tmp.bin + ARROW_1, frag0.len + 2);
 
 				frag0 = progcat(tmp, frag0);
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '+':
-				frag0 = pop();
+				frag0 = popfrag(stack, &stacksize, &stackpos);
 
-				/* "\0x05\0x04\0x00\0x05\0x00" */
-				tmp.len = 5;
+				tmp.len = ALTLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
-				tmp.bin[0] = ALT;
-				tmp.bin[1] = 4;
-				tmp.bin[2] = 0;
-				tmp.bin[3] = 5;
-				tmp.bin[4] = 0;
-
-				frag0 = progcat(frag0, tmp);
-				printf("%i\n", frag0.len);
-
-				/* "\0x04<length of frag0 + 6>\0x00" */
-				tmp.len = 3;
-				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
-				tmp.bin[0] = BACK;
-				c1 = (frag0.len + 1) ^ 256;
-				c2 = (frag0.len + 1) >> 8;
-				tmp.bin[1] = c1;
-				tmp.bin[2] = c2;
+				tmp.bin[OP] = ALT;
+				setnum(tmp.bin + ARROW_0, 4);
+				setnum(tmp.bin + ARROW_1, 5);
 
 				frag0 = progcat(frag0, tmp);
 
-				pile(frag0);
+				tmp.len = BACKLEN;
+				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
+				tmp.bin[OP] = BACK;
+				setnum(tmp.bin + ARROW_0, frag0.len + 1);
+
+				frag0 = progcat(frag0, tmp);
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '*':
-				frag0 = pop();
+				frag0 = popfrag(stack, &stacksize, &stackpos);
 
-				/* "\0x04<length of frag0 + 1 + 5>\0x00" */
-				tmp.len = 3;
+				tmp.len = BACKLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
 				tmp.bin[0] = BACK;
-				c1 = (frag0.len + 6) ^ 256;
-				c2 = (frag0.len + 6) >> 8;
-				tmp.bin[1] = c1;
-				tmp.bin[2] = c2;
+				setnum(tmp.bin + ARROW_0, frag0.len + 6);
 
 				frag0 = progcat(frag0, tmp);
 
-				/* "\0x05\0x02\0x00<length of frag0 + 2>" */
-				tmp.len = 5;
+				tmp.len = ALTLEN;
 				tmp.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				tmp.bin[0] = ALT;
-				tmp.bin[1] = 4;
-				tmp.bin[2] = 0;
-				c1 = (frag0.len + 2) ^ 256;
-				c2 = (frag0.len + 2) >> 8;
-				tmp.bin[3] = c1;
-				tmp.bin[4] = c2;
-				c1 = c2 = 0;
+				tmp.bin[OP] = ALT;
+				setnum(tmp.bin + ARROW_0, 4);
+				setnum(tmp.bin + ARROW_1, frag0.len + 2);
 
 				frag0 = progcat(tmp, frag0);
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '&':
-				frag2 = pop();
-				frag1 = pop();
+				frag2 = popfrag(stack, &stacksize, &stackpos);
+				frag1 = popfrag(stack, &stacksize, &stackpos);
 
 				frag0 = progcat(frag1, frag2);
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '[':
@@ -505,41 +514,38 @@ regex_t generate(char* post) {
 				}
 				s[i] = 0;
 
-				frag0.len = 3 + i;
+				frag0.len = CLASSLEN + i;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = CLASS;
-				c1 = i ^ 256;
-				c2 = i >> 8;
-				frag0.bin[1] = c1;
-				frag0.bin[2] = c2;
+				frag0.bin[OP] = CLASS;
+				setnum(frag0.bin + DATA, i);
 				memcpy(frag0.bin + 3, s, i + 1);
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '.':
-				frag0.len = 1;
+				frag0.len = WILDLEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = WILD;
+				frag0.bin[OP] = WILD;
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			default:
-				frag0.len = 2;
+				frag0.len = CHARLEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
-				frag0.bin[0] = CHAR;
-				frag0.bin[1] = *c;
+				frag0.bin[OP] = CHAR;
+				frag0.bin[DATA] = *c;
 
-				pile(frag0);
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 		}
 	}
 
-	prog.len = 1;
+	prog.len = MATCHLEN;
 	prog.bin = (char*)calloc(prog.len + 1, sizeof(char));
-	prog.bin[0] = MATCH;
+	prog.bin[OP] = MATCH;
 
 	for(; stacksize > 0; --stacksize)
 		prog = progcat(stack[stackpos--], prog);
@@ -547,14 +553,27 @@ regex_t generate(char* post) {
 	return prog;
 }
 
+regex_t recompile(char* exp) {
+	cacheinit();
+	char* post = parse(exp);
+	regex_t re = generate(post);
+	all[all_pos] = re.bin;
+	atexit(reclear);
+	return re;
+}
+
+int rematch(regex_t re, char* s, int sub) {
+}
+
 int main(int argc, char* argv[]) {
+	/*
 	cacheinit();
 	char* post = parse(argv[1]);
 	printf("%s\n", post);
-	regex_t re = generate(post);
+	*/
+	regex_t re = recompile(argv[1]);
 	for(int i = 0; i < re.len; ++i)
 		printf("\\0x%x", re.bin[i]);
 	printf("\n");
-	free(re.bin);
 	return 0;
 }

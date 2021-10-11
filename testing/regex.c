@@ -3,7 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define MAX 4096
+#define MAX 8192
 
 enum OPCODES {
 	CHAR = 1,
@@ -12,8 +12,8 @@ enum OPCODES {
 	BACK = 4,
 	ALT = 5,
 	CLASS = 6,
-	BLINE = 130,
-	ELINE = 140,
+	BLINE = 7,
+	ELINE = 8,
 	MATCH = 11,
 };
 
@@ -32,7 +32,7 @@ enum INSTLENS {
 enum OFFSETS {
 	OP = 0,
 	DATA = 1,
-	NEXT = 2,
+	CLASSBEGIN = 3,
 	ARROW_0 = 1,
 	ARROW_1 = 3,
 };
@@ -45,11 +45,14 @@ typedef struct {
 char cache1[MAX];
 char cache2[MAX];
 regex_t cache3[MAX];
+int cache4[MAX];
+int cache5[MAX];
 
 void cacheinit(void) {
 	for(int i = 0; i <= MAX; ++i) {
 		cache1[i] = cache2[i] = 0;
 		cache3[i] = (regex_t){ .bin = NULL, .len = 0 };
+		cache4[i] = cache5[i] = 0;
 	}
 }
 
@@ -58,7 +61,7 @@ char* all[MAX];
 int all_pos = 0;
 
 void reclear(void) {
-	for(int i = 0; i <= all_pos; ++i)
+	for(int i = 0; i < all_pos; ++i)
 		free(all[i]);
 }
 
@@ -554,26 +557,134 @@ regex_t generate(char* post) {
 }
 
 regex_t recompile(char* exp) {
+	static int first = 1;
 	cacheinit();
 	char* post = parse(exp);
+	printf("%s\n", post);
 	regex_t re = generate(post);
-	all[all_pos] = re.bin;
-	atexit(reclear);
+	all[all_pos++] = re.bin;
+	if(first)
+		atexit(reclear);
+	first = 0;
 	return re;
 }
 
+int addthread(int* list, int len, int thread) {
+	for(int i = 0; i < len; ++i) {
+		if(list[i] == thread)
+			return 0;
+	}
+	list[len] = thread;
+	return 1;
+}
+
+int inclass(char* class, int len, char c) {
+	for(int i = 0; i < len; ++i) {
+		if(class[i] == '\\') {
+			++i;
+			switch(class[i]) {
+				case 'z':
+					if(c >= 'a' && c <= 'z')
+						return 1;
+					break;
+				case 'Z':
+					if(c >= 'A' && c <= 'Z')
+						return 1;
+					break;
+				case '9':
+					if(c >= '0' && c <= '9')
+						return 1;
+					break;
+			}
+		}
+		if(class[i] == c)
+			return 1;
+	}
+	return 0;
+}
+
 int rematch(regex_t re, char* s, int sub) {
+	int* clist = cache4;
+	int cl_pos = 0;
+	int* nlist = cache5;
+	int nl_pos = 0;
+
+	int* tmp = NULL;
+
+	int pc = 0;
+	int sp = 0;
+	int s_len = strlen(s);
+
+	clist[cl_pos++] = pc;
+	for(; sp <= s_len; ++sp) {
+		for(int i = 0; i < cl_pos; ++i) {
+			pc = clist[i];
+			char op = re.bin[pc];
+			int a0 = pc + ARROW_0;
+			int a1 = pc + ARROW_1;
+			int cl = 0;
+
+			switch(op) {
+				case CHAR:
+					pc += DATA;
+					if(re.bin[pc] == s[sp])
+						addthread(nlist, nl_pos++, pc + ARROW_0);
+					break;
+
+				case WILD:
+					addthread(nlist, nl_pos++, a0);
+					break;
+
+				case JUMP:
+					addthread(clist, cl_pos++, a0 + getnum(re.bin + a0));
+					break;
+
+				case BACK:
+					addthread(clist, cl_pos++, a0 - getnum(re.bin + a0));
+					break;
+
+				case ALT:
+					addthread(clist, cl_pos++, a0 + getnum(re.bin + a0));
+					addthread(clist, cl_pos++, a1 + getnum(re.bin + a1));
+					break;
+
+				case CLASS:
+					cl = getnum(re.bin + pc + DATA);
+					if(inclass(re.bin + pc + CLASSBEGIN, cl, s[sp]))
+						addthread(nlist, nl_pos++, pc + CLASSLEN + cl);
+					break;
+
+				case BLINE:
+					if(sp == 0)
+						addthread(clist, cl_pos++, a0);
+					break;
+
+				case ELINE:
+					if(sp == (s_len - 1))
+						addthread(clist, cl_pos++, a0);
+					break;
+
+				case MATCH:
+					if(sp == s_len)
+						return 1;
+					break;
+			}
+		}
+		tmp = clist;
+		clist = nlist;
+		nlist = tmp;
+		cl_pos = nl_pos;
+		nl_pos = 0;
+	}
+
+	return 0;
 }
 
 int main(int argc, char* argv[]) {
-	/*
-	cacheinit();
-	char* post = parse(argv[1]);
-	printf("%s\n", post);
-	*/
 	regex_t re = recompile(argv[1]);
 	for(int i = 0; i < re.len; ++i)
 		printf("\\0x%x", re.bin[i]);
 	printf("\n");
+	printf("%d\n", rematch(re, argv[2], 1));
 	return 0;
 }

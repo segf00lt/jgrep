@@ -390,4 +390,5 @@ if __name__ == '__main__':
     post = parse(argv[1])
     print(post)
     re = assemble(post)
+    print(list(re))
     print(match(re, argv[2], True))

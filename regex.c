@@ -1,78 +1,80 @@
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-#include <ctype.h>
+#include <string.h>
 #include "regex.h"
 
-/* store val of n_atoms and baseop before group or class */
-struct Prev {
-	int atoms;
-	char baseop;
+enum OPCODES {
+	CHAR = 1,
+	WILD = 2,
+	JUMP = 3,
+	BACK = 4,
+	ALT = 5,
+	CLASS = 6,
+	BLINE = 7,
+	ELINE = 8,
+	MATCH = 11,
 };
 
-/* global variables */
-char c1[MAX];
-char c2[MAX];
-struct Prev p1[MAX];
-Frag f1[MAX];
-enum STATETYPE { REG, WILD, UPPER, LOWER, NUM, SPLIT, MATCH };
-Frag nilFrag = (Frag){ .start = NULL, .out = NULL, .l_out = 0 };
-State matchstate = (State){ .t = MATCH, .c = 0, .out_0 = NULL, .out_1 = NULL, .id = 0 };
-List clist, nlist, t;
+enum INSTLENS {
+	CHARLEN = 2,
+	WILDLEN = 1,
+	JUMPLEN = 3,
+	BACKLEN = 3,
+	ALTLEN = 5,
+	CLASSLEN = 3,
+	BLINELEN = 1,
+	ELINELEN = 1,
+	MATCHLEN = 1,
+};
 
-/* store all states allocated to facilitate deallocation */
-State* all[MAX];
+enum OFFSETS {
+	OP = 0,
+	DATA = 1,
+	CLASSBEGIN = 3,
+	ARROW_0 = 1,
+	ARROW_1 = 3,
+};
+
+/* store all compiled expressions */
+char* all[MAX];
 int all_pos = 0;
 
-void initglobal() {
-	for(int i = 0; i < MAX; ++i) {
-		c1[i] = c2[i] = '\000';
-		p1[i] = (struct Prev){ .atoms = 0, .baseop = 0 };
+/* cache for parse() and generate() */
+char cache1[MAX];
+char cache2[MAX];
+regex_t cache3[MAX];
 
-		f1[i] = nilFrag;
+void allfree(void) {
+	for(int i = 0; i < all_pos; ++i)
+		free(all[i]);
+}
 
-		clist.s[i] = nlist.s[i] = t.s[i] = NULL;
-
-		all[i] = NULL;
+void cacheinit(void) {
+	for(int i = 0; i <= MAX; ++i) {
+		cache1[i] = cache2[i] = 0;
+		cache3[i] = (regex_t){ .bin = NULL, .len = 0 };
 	}
 }
 
-
-
-char* crange(char f, char t) {
-	int l = t - f;
-	if(l == 0) return "\000";
-
-	char* s = (char*)calloc(l + 2, sizeof(char));
-	char* pos = s;
-
-	if(l > 0)
-		for(char c = f++; c <= t;*(pos++) = c++);
-	else
-		for(char c = f--; c >= t;*(pos++) = c--);
-
-	return s;
-}
-
-char* postfix_fmt(char* exp) {
-	size_t l_exp = strlen(exp);
-	if(!l_exp) {
-		fprintf(stderr, "error: empty expression\n");
-		exit(1);
-	} else if(l_exp > MAX) {
-		fprintf(stderr, "error: expression too large\n");
+char* parse(char* exp) {
+	int l_exp = strlen(exp);
+	if(l_exp == 0) {
+		fprintf(stderr, "regex: parse: empty expression\n");
 		exit(1);
 	}
-	char* stack = c1;
+	if(l_exp >= MAX) {
+		fprintf(stderr, "regex: parse: expression too large\n");
+		exit(1);
+	}
+	char* stack = cache1;
 	int stackpos = 0;
 	int stacksize = 0;
 
-	char* buf = c2;
+	char* buf = cache2;
 	int i = 0;
 
 	int n_atoms = 0;
-
-	struct Prev* prev = p1;
+	int prev_atoms[MAX];
 	int j = 0;
 
 	char baseop = '&';
@@ -83,18 +85,17 @@ char* postfix_fmt(char* exp) {
 	for(char* c = exp; *c; ++c) {
 		switch(*c) {
 			case '(':
-				if(baseop == '|')
-					break;
-
+				if(baseop != '&') {
+					fprintf(stderr, "regex: parse: group operator within class\n");
+					exit(1);
+				}
 				if(n_atoms > 1) {
 					buf[i++] = baseop;
 					--n_atoms;
 				}
 
-				prev[j].baseop = baseop;
-				prev[j++].atoms = n_atoms;
+				prev_atoms[j++] = n_atoms;
 
-				baseop = '&';
 				n_atoms = 0;
 
 				if(stacksize > 0)
@@ -107,13 +108,17 @@ char* postfix_fmt(char* exp) {
 				break;
 
 			case '|':
+				if(baseop != '&') {
+					fprintf(stderr, "regex: parse: alternation within class\n");
+					exit(1);
+				}
 				if(n_atoms == 0) {
-					fprintf(stderr, "error: lone or incomplete alternation");
+					fprintf(stderr, "regex: parse: lone or incomplete alternation");
 					exit(1);
 				}
 
 				for(--n_atoms; n_atoms > 0; --n_atoms)
-					buf[i++] = '&';
+					buf[i++] = baseop;
 
 				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '('; --stacksize)
 				{
@@ -131,16 +136,17 @@ char* postfix_fmt(char* exp) {
 				break;
 
 			case ')':
-				if(baseop == '|')
-					break;
-
+				if(baseop != '&') {
+					fprintf(stderr, "regex: parse: group operator within class\n");
+					exit(1);
+				}
 				if(j == 0 || n_atoms == 0) {
-					fprintf(stderr, "error: mismatched or empty parentheses\n");
+					fprintf(stderr, "regex: parse: mismatched or empty parentheses\n");
 					exit(1);
 				}
 
 				for(--n_atoms; n_atoms > 0; --n_atoms)
-					buf[i++] = '&';
+					buf[i++] = baseop;
 
 				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '('; --stacksize)
 				{
@@ -156,121 +162,95 @@ char* postfix_fmt(char* exp) {
 					--stacksize;
 				}
 
-				baseop = prev[--j].baseop;
-				n_atoms = prev[j].atoms + 1;
+				n_atoms = prev_atoms[--j] + 1;
 				break;
 
 			case '[':
+				if(baseop != '&') {
+					fprintf(stderr, "regex: parse: mismatched or nested square brackets\n");
+					exit(1);
+				}
+
 				if(n_atoms > 1) {
 					buf[i++] = baseop;
 					--n_atoms;
 				}
 
-				prev[j].baseop = baseop;
-				prev[j++].atoms = n_atoms;
-
-				baseop = '|';
+				buf[i++] = *c;
+				prev_atoms[j++] = n_atoms;
 				n_atoms = 0;
-
-				if(stacksize > 0)
-					++stackpos;
-				else
-					stackpos = 0;
-
-				stack[stackpos] = *c;
-				++stacksize;
+				baseop = 127;
 				break;
 
 			case '-':
-				pc = *(c - 1);
-				nc = *(c + 1);
-
 				if(baseop == '&') {
 					if(n_atoms > 1) {
-						--n_atoms;
 						buf[i++] = baseop;
+						--n_atoms;
 					}
-
-					buf[i++] = '\\';
 					buf[i++] = *c;
 					++n_atoms;
 					break;
-				}
-
-				if(pc > nc) {
-					fprintf(stderr, "error: invalid range end\n");
+				} else if(n_atoms == 0) {
+					fprintf(stderr, "regex: parse: invalid range\n");
 					exit(1);
 				}
 
-				if(pc == 'a' && nc == 'z' || pc == 'A' && nc == 'Z' || pc == '0' && nc == '9')
-				{
-					buf[i - 1] = *c;
-					buf[i++] = pc;
+				pc = *(c - 1);
+				nc = *(c + 1);
+
+				if(nc <= pc || pc == 127 || pc <= 31) {
+					fprintf(stderr, "regex: parse: invalid range\n");
+					exit(1);
+				}
+
+				if(pc == 'a' && nc == 'z' || pc == 'A' && nc == 'Z' || pc == '0' && nc == '9') {
+					buf[i - 1] = '\\';
+					buf[i++] = nc;
 				} else {
-					char* tmp = crange(pc + 1, nc);
-					buf[--i] = '\\';
-					buf[++i] = pc;
-					++i;
+					char* tmp = (char*)calloc((nc - pc) + 2, sizeof(char));
+					char* s = tmp;
+					for(char a = pc++; a <= nc; *(s++) = a++);
+					--i;
 					for(char* pos = tmp; *pos != 0; ++pos) {
-						buf[i++] = '\\';
+						if(*pos >= 91 && *pos <= 93)
+							buf[i++] = '\\';
 						buf[i++] = *pos;
-						buf[i++] = '|';
 					}
 					free(tmp);
 				}
-
+				++n_atoms;
 				++c;
 
 				break;
 
 			case ']':
-				if(j == 0 || n_atoms == 0) {
-					fprintf(stderr, "error: mismatched or empty square brackets\n");
-					exit(1);
-				}
-
-				for(--n_atoms; n_atoms > 0; --n_atoms)
-					buf[i++] = '|';
-
-				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '['; --stacksize)
-				{
-					buf[i++] = stack[stackpos];
-					stack[stackpos--] = 0;
-				}
-
-				if(stacksize == 0) {
-					stackpos = 0;
-					stack[stackpos] = 0;
-				} else {
-					stack[stackpos--] = 0;
-					--stacksize;
-				}
-
-				baseop = prev[--j].baseop;
-				n_atoms = prev[j].atoms + 1;
-				break;
-
-			case '*':
-				if(n_atoms == 0) {
-					fprintf(stderr, "error: lone repetition operator\n");
+				if(baseop == '&' || n_atoms == 0) {
+					fprintf(stderr, "regex: parse: mismatched or empty square brackets\n");
 					exit(1);
 				}
 				buf[i++] = *c;
-				break;
-
-			case '+':
-				if(n_atoms == 0) {
-					fprintf(stderr, "error: lone repetition operator\n");
-					exit(1);
-				}
-				buf[i++] = *c;
+				n_atoms = prev_atoms[--j] + 1;
+				baseop = '&';
 				break;
 
 			case '?':
+			case '+':
+			case '*':
 				if(n_atoms == 0) {
-					fprintf(stderr, "error: lone repetition operator\n");
+					fprintf(stderr, "regex: parse: lone repetition operator\n");
 					exit(1);
 				}
+				buf[i++] = *c;
+				break;
+
+			case '^':
+			case '$':
+				if(n_atoms > 1) {
+					--n_atoms;
+					buf[i++] = baseop;
+				}
+
 				buf[i++] = *c;
 				break;
 
@@ -282,12 +262,28 @@ char* postfix_fmt(char* exp) {
 
 				nc = *(c + 1);
 				if(nc == 0) {
-					fprintf(stderr, "error: lone escape operator\n");
+					fprintf(stderr, "regex: parse: lone escape operator\n");
 					exit(1);
-				} else if(nc == '.' || nc == '&' || nc == '\\')
-					buf[i++] = *c;
-				++c;
+				}
+				switch(nc) {
+					case '.':
+					case '(':
+					case '|':
+					case ')':
+					case '[':
+					case '-':
+					case ']':
+					case '?':
+					case '+':
+					case '*':
+					case '&':
+					case '^':
+					case '$':
+					case '\\':
+						buf[i++] = *c;
+				}
 
+				++c;
 				buf[i++] = *c;
 				++n_atoms;
 				break;
@@ -301,12 +297,15 @@ char* postfix_fmt(char* exp) {
 				buf[i++] = *c;
 				++n_atoms;
 				break;
-
 		}
+	}
+	if(baseop != '&') {
+		fprintf(stderr, "regex: parse: mismatched square brackets\n");
+		exit(1);
 	}
 
 	if(j != 0) {
-		fprintf(stderr, "error: mismatched parentheses or square brackets\n");
+		fprintf(stderr, "regex: parse: mismatched parentheses\n");
 		exit(1);
 	}
 
@@ -321,401 +320,394 @@ char* postfix_fmt(char* exp) {
 	return buf;
 }
 
-
-State* nState(int t, char c, State* out_0, State* out_1) {
-	State* s = (State*)malloc(sizeof(State));
-	s->t = t;
-	s->c = c;
-	s->out_0 = out_0;
-	s->out_1 = out_1;
-	s->id = 0;
-	return s;
+/* getnum() and setnum() allow treatment of two adjacent chars as one 2 byte number */
+void setnum(char* c, int n) {
+	c[0] = n ^ 256;
+	c[1] = n >> 8;
 }
 
-void patch(State*** out, State* s, int l_out) {
-	for(int i = (l_out - 1); i >= 0; --i)
-		*(out[i]) = s;
+int getnum(char* c) {
+	int n = 0;
+	n |= c[0];
+	n |= c[1] << 8;
+	return n;
 }
 
-State* nfa_mk(char* post) {
-	if(!post) {
-		fprintf(stderr, "error: empty postfix expression\n");
-		exit(1);
-	}
+void pilefrag(regex_t frag, regex_t* stack, int* stacksize, int* stackpos) {
+	if(*stacksize > 0)
+		++(*stackpos);
+	++(*stacksize);
+	stack[*stackpos] = frag;
+}
+	
+regex_t popfrag(regex_t* stack, int* stacksize, int* stackpos) {
+	regex_t frag = stack[*stackpos];
+	stack[*stackpos] = (regex_t){ .bin = NULL, .len = 0 };
+	if(*stacksize > 1) {
+		--(*stackpos);
+		--(*stacksize);
+	} else
+		*stackpos = *stacksize = 0;
+	return frag;
+}
 
-	Frag* stack = f1;
+regex_t progcat(regex_t f1, regex_t f2) {
+	regex_t f0;
+	f0.len = f1.len + f2.len;
+	f0.bin = (char*)calloc(f0.len + 1, sizeof(char));
+
+	int i = 0;
+	int j = 0;
+	for(; i < f1.len; ++i)
+		f0.bin[i] = f1.bin[i];
+	for(int i = f1.len; i < f0.len; ++i)
+		f0.bin[i] = f2.bin[j++];
+
+	free(f1.bin);
+	free(f2.bin);
+	return f0;
+}
+
+regex_t generate(char* post) {
+	regex_t nilfrag = (regex_t){ .bin = NULL, .len = 0 };
+	regex_t prog = nilfrag;
+	regex_t frag0 = nilfrag;
+	regex_t frag1 = nilfrag;
+	regex_t frag2 = nilfrag;
+	regex_t tmp = nilfrag;
+	regex_t* stack = cache3;
 	int stackpos = 0;
 	int stacksize = 0;
 
-	/* make temporary variables */
-	State* s = NULL;
-	State*** o = NULL;
-	Frag frag, e0, e1, e2;
-	frag = e0 = e1 = e2 = nilFrag;
-	int t = 0;
-
-	/* clear temporary variables */
-	inline void cleartmp() {
-		s = NULL;
-		o = NULL;
-		frag = e0 = e1 = e2 = nilFrag;
-		t = 0;
-	}
-
-	for(char*c = post; *c; ++c) {
+	for(char* c = post; *c; ++c) {
+		tmp = frag0 = frag1 = frag2 = nilfrag;
 		switch(*c) {
 			case '\\':
 				++c;
-
-			default:
-				s = nState(REG, *c, NULL, NULL);
-				all[all_pos++] = s;
-
-				o = (State***)malloc(sizeof(State**));
-				*o = &(s->out_0);
-
-				frag = (Frag){ .start = s, .out = o, .l_out = 1 };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
+				frag0.len = CHARLEN;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = CHAR;
+				frag0.bin[DATA] = *c;
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
-			case '-':
-				switch(*(c + 1)) {
-					case 'A':
-						t = UPPER;
-						break;
-					case 'a':
-						t = LOWER;
-						break;
-					case '0':
-						t = NUM;
-						break;
-				}
-
-				s = nState(t, 0, NULL, NULL);
-				all[all_pos++] = s;
-
-				o = (State***)malloc(sizeof(State**));
-				*o = &(s->out_0);
-
-				frag = (Frag){ .start = s, .out = o, .l_out = 1 };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				++c;
-
-				cleartmp();
+			case '^':
+				frag0.len = BLINELEN;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = BLINE;
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
-			case '.':
-				s = nState(WILD, 0, NULL, NULL);
-				all[all_pos++] = s;
-
-				o = (State***)malloc(sizeof(State**));
-				*o = &(s->out_0);
-
-				frag = (Frag){ .start = s, .out = o, .l_out = 1 };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
-				break;
-
-			case '&':
-				e2 = stack[stackpos];
-				stack[stackpos--] = nilFrag;
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
-				stacksize -= 2;
-
-				if(stacksize > 0)
-					--stackpos;
-
-				patch(e1.out, e2.start, e1.l_out);
-				free(e1.out);
-
-				frag = (Frag){ .start = e1.start, .out = e2.out, .l_out = e2.l_out };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
+			case '$':
+				frag0.len = ELINELEN;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = ELINE;
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '|':
-				e2 = stack[stackpos];
-				stack[stackpos--] = nilFrag;
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
-				stacksize -= 2;
+				frag2 = popfrag(stack, &stacksize, &stackpos);
+				frag1 = popfrag(stack, &stacksize, &stackpos);
 
-				if(stacksize > 0)
-					--stackpos;
+				tmp.len = JUMPLEN;
+				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
+				tmp.bin[OP] = JUMP;
+				setnum(tmp.bin + ARROW_0, frag2.len + 2);
 
-				s = nState(SPLIT, 0, e1.start, e2.start);
-				all[all_pos++] = s;
-				o = (State***)calloc(e1.l_out + e2.l_out, sizeof(State**));
+				frag1 = progcat(frag1, tmp);
+				tmp = nilfrag;
 
-				for(size_t l = 0; l < e1.l_out; ++l)
-					o[l] = e1.out[l];
+				frag0.len = ALTLEN;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = ALT;
+				setnum(frag0.bin + ARROW_0, 4);
+				setnum(frag0.bin + ARROW_1, frag1.len + 2);
 
-				for(size_t l = 0; l < e2.l_out; ++l)
-					*((o + e1.l_out) + l) = e2.out[l];
+				frag0 = progcat(frag0, frag1);
+				frag0 = progcat(frag0, frag2);
 
-				free(e1.out);
-				free(e2.out);
-
-				frag = (Frag){ .start = s, .out = o, .l_out = (e1.l_out + e2.l_out) };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
-				break;
-
-			case '*':
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
-				--stacksize;
-
-				if(stacksize > 0)
-					--stackpos;
-
-				s = nState(SPLIT, 0, e1.start, NULL);
-				all[all_pos++] = s;
-
-				patch(e1.out, s, e1.l_out);
-				free(e1.out);
-
-				o = (State***)malloc(sizeof(State**));
-				*o = &(s->out_1);
-
-				frag = (Frag){ .start = s, .out = o, .l_out = 1 };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
-				break;
-
-			case '+':
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
-				--stacksize;
-
-				if(stacksize > 0)
-					--stackpos;
-
-				s = nState(SPLIT, 0, e1.start, NULL);
-				all[all_pos++] = s;
-
-				patch(e1.out, s, e1.l_out);
-				free(e1.out);
-
-				o = (State***)malloc(sizeof(State**));
-				*o = &(s->out_1);
-
-				frag = (Frag){ .start = e1.start, .out = o, .l_out = 1 };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
 
 			case '?':
-				e1 = stack[stackpos];
-				stack[stackpos] = nilFrag;
-				--stacksize;
+				frag0 = popfrag(stack, &stacksize, &stackpos);
 
-				if(stacksize > 0)
-					--stackpos;
+				tmp.len = ALTLEN;
+				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
+				tmp.bin[OP] = ALT;
+				setnum(tmp.bin + ARROW_0, 4);
+				setnum(tmp.bin + ARROW_1, frag0.len + 2);
 
-				s = nState(SPLIT, 0, e1.start, NULL);
-				all[all_pos++] = s;
+				frag0 = progcat(tmp, frag0);
 
-				o = (State***)calloc(e1.l_out + 1, sizeof(State**));
-
-				for(size_t l = 0; l < e1.l_out; ++l)
-					o[l] = e1.out[l];
-
-				*(o + e1.l_out) = &(s->out_1);
-
-				free(e1.out);
-
-				frag = (Frag){ .start = s, .out = o, .l_out = (e1.l_out + 1) };
-
-				if(stacksize > 0)
-					++stackpos;
-
-				stack[stackpos] = frag;
-				++stacksize;
-
-				cleartmp();
+				pilefrag(frag0, stack, &stacksize, &stackpos);
 				break;
+
+			case '+':
+				frag0 = popfrag(stack, &stacksize, &stackpos);
+
+				tmp.len = ALTLEN;
+				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
+				tmp.bin[OP] = ALT;
+				setnum(tmp.bin + ARROW_0, 4);
+				setnum(tmp.bin + ARROW_1, 5);
+
+				frag0 = progcat(frag0, tmp);
+
+				tmp.len = BACKLEN;
+				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
+				tmp.bin[OP] = BACK;
+				setnum(tmp.bin + ARROW_0, frag0.len + 1);
+
+				frag0 = progcat(frag0, tmp);
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
+				break;
+
+			case '*':
+				frag0 = popfrag(stack, &stacksize, &stackpos);
+
+				tmp.len = BACKLEN;
+				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
+				tmp.bin[0] = BACK;
+				setnum(tmp.bin + ARROW_0, frag0.len + 6);
+
+				frag0 = progcat(frag0, tmp);
+
+				tmp.len = ALTLEN;
+				tmp.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				tmp.bin[OP] = ALT;
+				setnum(tmp.bin + ARROW_0, 4);
+				setnum(tmp.bin + ARROW_1, frag0.len + 2);
+
+				frag0 = progcat(tmp, frag0);
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
+				break;
+
+			case '&':
+				frag2 = popfrag(stack, &stacksize, &stackpos);
+				frag1 = popfrag(stack, &stacksize, &stackpos);
+
+				frag0 = progcat(frag1, frag2);
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
+				break;
+
+			case '[':
+				char s[97];
+				int i = 0;
+				for(++c; *c != ']'; ++c) {
+					if(*c == 127)
+						continue;
+					if(*c == '\\') {
+						s[i++] = *c;
+						++c;
+					}
+					s[i++] = *c;
+				}
+				s[i] = 0;
+
+				frag0.len = CLASSLEN + i;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = CLASS;
+				setnum(frag0.bin + DATA, i);
+				memcpy(frag0.bin + 3, s, i + 1);
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
+				break;
+
+			case '.':
+				frag0.len = WILDLEN;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = WILD;
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
+				break;
+
+			default:
+				frag0.len = CHARLEN;
+				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
+				frag0.bin[OP] = CHAR;
+				frag0.bin[DATA] = *c;
+
+				pilefrag(frag0, stack, &stacksize, &stackpos);
+				break;
+
 		}
 	}
-	cleartmp();
 
-	e0 = stack[stackpos];
-	stack[stackpos] = nilFrag;
-	--stacksize;
+	prog.len = MATCHLEN;
+	prog.bin = (char*)calloc(prog.len + 1, sizeof(char));
+	prog.bin[OP] = MATCH;
 
-	patch(e0.out, &matchstate, e0.l_out);
+	for(; stacksize > 0; --stacksize)
+		prog = progcat(stack[stackpos--], prog);
 
-	free(e0.out);
-
-	return e0.start;
+	return prog;
 }
 
-void nfa_del(void) {
-	if(all_pos == 0)
-		return;
-	for(--all_pos; all_pos >= 0; --all_pos)
-		free(all[all_pos]);
+regex_t recompile(char* exp) {
+	static int first = 1;
+	cacheinit();
+	char* post = parse(exp);
+	regex_t re = generate(post);
+	printf("%s\n", post);
+	all[all_pos++] = re.bin;
+	if(first)
+		atexit(allfree);
+	first = 0;
+	return re;
 }
 
-State* recomp(char* exp) {
-	static unsigned int first = 1;
-	if(first) {
-		initglobal();
-		atexit(nfa_del);
-		first = !first;
+typedef struct {
+	int* t;
+	int pos;
+} Threadlist;
+
+int addthread(Threadlist* list, int thread) {
+	for(int i = 0; i < list->pos; ++i) {
+		if(list->t[i] == thread)
+			return 0;
 	}
-	char* post = postfix_fmt(exp);
-	State* nfa = nfa_mk(post);
-	return nfa;
+	list->t[list->pos] = thread;
+	++(list->pos);
+	return 1;
 }
 
-
-int listid = 0;
-
-void addstate(State* s, List* l) {
-	if(s == NULL || s->id == listid)
-		return;
-	s->id = listid;
-
-	if(s->t == SPLIT) {
-		addstate(s->out_0, l);
-		addstate(s->out_1, l);
-		return;
-	}
-
-	l->s[l->n++] = s;
-}
-
-int rematch(State* start, char* str) {
-	clist.n = nlist.n = 0;
-
-	++listid;
-	addstate(start, &clist);
-
-	for(; *str; ++str) {
-		char c = *str;
-		State* s;
-		nlist.n = 0;
-		++listid;
-
-		/* step each state in clist to it's next state if c is matched */
-		for(int i = 0; i < clist.n; ++i) {
-			s = clist.s[i];
-			if(
-			(s->c == c) ||
-			(s->t == WILD) ||
-			(s->t == UPPER && isupper(c)) ||
-			(s->t == LOWER && islower(c)) ||
-			(s->t == NUM && isdigit(c))
-			)
-				addstate(s->out_0, &nlist);
+int inclass(char* class, int len, char c) {
+	for(int i = 0; i < len; ++i) {
+		if(class[i] == '\\') {
+			++i;
+			switch(class[i]) {
+				case 'z':
+					if(c >= 'a' && c <= 'z')
+						return 1;
+					break;
+				case 'Z':
+					if(c >= 'A' && c <= 'Z')
+						return 1;
+					break;
+				case '9':
+					if(c >= '0' && c <= '9')
+						return 1;
+					break;
+			}
 		}
+		if(class[i] == c)
+			return 1;
+	}
+	return 0;
+}
 
-		t = clist;
+regex_t submatch(regex_t re) {
+	regex_t back = generate(".*");
+	regex_t front = generate(".*");
+	--back.len;
+	--re.len;
+	regex_t new = (regex_t){ .bin = NULL, .len = back.len + re.len + front.len };
+	new.bin = (char*)calloc(new.len + 1, sizeof(char));
+
+	int i = 0;
+	int j = 0;
+	int k = 0;
+	for(; i < back.len; ++i)
+		new.bin[i] = back.bin[i];
+	for(i = back.len; j < re.len; ++j)
+		new.bin[i++] = re.bin[j];
+	for(i = back.len + re.len; k < front.len; ++k)
+		new.bin[i++] = front.bin[k];
+
+	free(back.bin);
+	free(front.bin);
+	
+	return new;
+}
+
+int rematch(regex_t re, char* s, int sub) {
+	if(sub)
+		re = submatch(re);
+
+	Threadlist clist = (Threadlist){ .pos = 0 };
+	clist.t = (int*)malloc(re.len * sizeof(int));
+	Threadlist nlist = (Threadlist){ .pos = 0 };
+	nlist.t = (int*)malloc(re.len * sizeof(int));
+	Threadlist tmp;
+
+	int pc = 0;
+	int sp = 0;
+	int s_len = strlen(s);
+
+	clist.t[clist.pos++] = pc;
+	for(; sp <= s_len; ++sp) {
+		for(int i = 0; i < clist.pos; ++i) {
+			pc = clist.t[i];
+			char op = re.bin[pc];
+			int a0 = pc + ARROW_0;
+			int a1 = pc + ARROW_1;
+			int cl = 0;
+
+			switch(op) {
+				case CHAR:
+					pc += DATA;
+					if(re.bin[pc] == s[sp])
+						addthread(&nlist, pc + ARROW_0);
+					break;
+
+				case WILD:
+					addthread(&nlist, a0);
+					break;
+
+				case JUMP:
+					addthread(&clist, a0 + getnum(re.bin + a0));
+					break;
+
+				case BACK:
+					addthread(&clist, a0 - getnum(re.bin + a0));
+					break;
+
+				case ALT:
+					addthread(&clist, a0 + getnum(re.bin + a0));
+					addthread(&clist, a1 + getnum(re.bin + a1));
+					break;
+
+				case CLASS:
+					cl = getnum(re.bin + pc + DATA);
+					if(inclass(re.bin + pc + CLASSBEGIN, cl, s[sp]))
+						addthread(&nlist, pc + CLASSLEN + cl);
+					break;
+
+				case BLINE:
+					if(sp == 0)
+						addthread(&clist, a0);
+					break;
+
+				case ELINE:
+					if(sp == (s_len - 1))
+						addthread(&clist, a0);
+					break;
+
+				case MATCH:
+					if(sp == s_len) {
+						if(sub)
+							free(re.bin);
+						free(clist.t);
+						free(nlist.t);
+						return 1;
+					}
+					break;
+			}
+		}
+		tmp = clist;
 		clist = nlist;
-		nlist = t;
+		nlist = tmp;
+		nlist.pos = 0;
 	}
+	free(clist.t);
+	free(nlist.t);
 
-	int ismatch = 0;
-	for(int i = 0; i < clist.n; ++i) {
-		if(clist.s[i] == &matchstate) {
-			ismatch = 1;
-			break;
-		}
-	}
+	if(sub)
+		free(re.bin);
 
-	return ismatch;
-}
-
-/* matches substring within str as well */
-int rematchsub(State* start, char* str) {
-	clist.n = nlist.n = 0;
-
-	++listid;
-	addstate(start, &clist);
-	int walked = 0;
-
-	for(; *str; ++str) {
-		char c = *str;
-		State* s;
-		nlist.n = 0;
-		++listid;
-
-		/* step each state in clist to it's next state if c is matched */
-		for(int i = 0; i < clist.n; ++i) {
-			s = clist.s[i];
-			if(
-			(s->c == c) ||
-			(s->t == WILD) ||
-			(s->t == UPPER && isupper(c)) ||
-			(s->t == LOWER && islower(c)) ||
-			(s->t == NUM && isdigit(c))
-			)
-			{
-				addstate(s->out_0, &nlist);
-				walked = 1;
-			} else
-				walked = 0;
-		}
-
-		if(walked) {
-			t = clist;
-			clist = nlist;
-			nlist = t;
-		}
-	}
-
-	int ismatch = 0;
-	for(int i = 0; i < clist.n; ++i) {
-		if(clist.s[i] == &matchstate) {
-			ismatch = 1;
-			break;
-		}
-	}
-
-	return ismatch;
+	return 0;
 }

@@ -552,7 +552,6 @@ regex_t recompile(char* exp) {
 	cacheinit();
 	char* post = parse(exp);
 	regex_t re = generate(post);
-	printf("%s\n", post);
 	all[all_pos++] = re.bin;
 	if(first)
 		atexit(allfree);

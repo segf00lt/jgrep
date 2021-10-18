@@ -35,28 +35,19 @@ enum OFFSETS {
 	ARROW_1 = 3,
 };
 
-/* store all compiled expressions */
-char* all[MAX];
-int all_pos = 0;
-
 /* cache for parse() and generate() */
-char cache1[MAX];
-char cache2[MAX];
-regex_t cache3[MAX];
+static char cache1[MAX];
+static char cache2[MAX];
+static regex_t cache3[MAX];
 
-void allfree(void) {
-	for(int i = 0; i < all_pos; ++i)
-		free(all[i]);
-}
-
-void cacheinit(void) {
+static void cacheinit(void) {
 	for(int i = 0; i <= MAX; ++i) {
 		cache1[i] = cache2[i] = 0;
 		cache3[i] = (regex_t){ .bin = NULL, .len = 0 };
 	}
 }
 
-char* parse(char* exp) {
+static char* parse(char* exp) {
 	int l_exp = strlen(exp);
 	if(l_exp == 0) {
 		fprintf(stderr, "regex: parse: empty expression\n");
@@ -321,26 +312,26 @@ char* parse(char* exp) {
 }
 
 /* getnum() and setnum() allow treatment of two adjacent chars as one 2 byte number */
-void setnum(char* c, int n) {
+static inline void setnum(char* c, int n) {
 	c[0] = n ^ 256;
 	c[1] = n >> 8;
 }
 
-int getnum(char* c) {
+static inline int getnum(char* c) {
 	int n = 0;
 	n |= c[0];
 	n |= c[1] << 8;
 	return n;
 }
 
-void pilefrag(regex_t frag, regex_t* stack, int* stacksize, int* stackpos) {
+static void pilefrag(regex_t frag, regex_t* stack, int* stacksize, int* stackpos) {
 	if(*stacksize > 0)
 		++(*stackpos);
 	++(*stacksize);
 	stack[*stackpos] = frag;
 }
 	
-regex_t popfrag(regex_t* stack, int* stacksize, int* stackpos) {
+static regex_t popfrag(regex_t* stack, int* stacksize, int* stackpos) {
 	regex_t frag = stack[*stackpos];
 	stack[*stackpos] = (regex_t){ .bin = NULL, .len = 0 };
 	if(*stacksize > 1) {
@@ -351,7 +342,7 @@ regex_t popfrag(regex_t* stack, int* stacksize, int* stackpos) {
 	return frag;
 }
 
-regex_t progcat(regex_t f1, regex_t f2) {
+static regex_t progcat(regex_t f1, regex_t f2) {
 	regex_t f0;
 	f0.len = f1.len + f2.len;
 	f0.bin = (char*)calloc(f0.len + 1, sizeof(char));
@@ -368,7 +359,7 @@ regex_t progcat(regex_t f1, regex_t f2) {
 	return f0;
 }
 
-regex_t generate(char* post) {
+static regex_t generate(char* post) {
 	regex_t nilfrag = (regex_t){ .bin = NULL, .len = 0 };
 	regex_t prog = nilfrag;
 	regex_t frag0 = nilfrag;
@@ -548,15 +539,14 @@ regex_t generate(char* post) {
 }
 
 regex_t recompile(char* exp) {
-	static int first = 1;
 	cacheinit();
 	char* post = parse(exp);
 	regex_t re = generate(post);
-	all[all_pos++] = re.bin;
-	if(first)
-		atexit(allfree);
-	first = 0;
 	return re;
+}
+
+void refree(regex_t* re) {
+	free(re->bin);
 }
 
 typedef struct {
@@ -564,7 +554,7 @@ typedef struct {
 	int pos;
 } Threadlist;
 
-int addthread(Threadlist* list, int thread) {
+static int addthread(Threadlist* list, int thread) {
 	for(int i = 0; i < list->pos; ++i) {
 		if(list->t[i] == thread)
 			return 0;
@@ -574,7 +564,7 @@ int addthread(Threadlist* list, int thread) {
 	return 1;
 }
 
-int inclass(char* class, int len, char c) {
+static int inclass(char* class, int len, char c) {
 	for(int i = 0; i < len; ++i) {
 		if(class[i] == '\\') {
 			++i;
@@ -599,33 +589,32 @@ int inclass(char* class, int len, char c) {
 	return 0;
 }
 
-regex_t submatch(regex_t re) {
-	regex_t back = generate(".*");
-	regex_t front = generate(".*");
-	--back.len;
+static regex_t submatch(regex_t re) {
+	char bbin[9] = { 5, 4, 0, 6, 0, 2, 4, 7, 0 }; /* \0x5\0x4\0x0\0x6\0x0\0x2\0x4\0x7\0x0 */
+	char fbin[10] = { 5, 4, 0, 6, 0, 2, 4, 7, 0, 11 }; /* \0x5\0x4\0x0\0x6\0x0\0x2\0x4\0x7\0x0\0xb */
 	--re.len;
-	regex_t new = (regex_t){ .bin = NULL, .len = back.len + re.len + front.len };
+	regex_t new = (regex_t){ .bin = NULL, .len = 9 + re.len + 10 };
 	new.bin = (char*)calloc(new.len + 1, sizeof(char));
 
 	int i = 0;
 	int j = 0;
 	int k = 0;
-	for(; i < back.len; ++i)
-		new.bin[i] = back.bin[i];
-	for(i = back.len; j < re.len; ++j)
+	for(; i < 9; ++i)
+		new.bin[i] = bbin[i];
+	for(i = 9; j < re.len; ++j)
 		new.bin[i++] = re.bin[j];
-	for(i = back.len + re.len; k < front.len; ++k)
-		new.bin[i++] = front.bin[k];
+	for(i = 9 + re.len; k < 10; ++k)
+		new.bin[i++] = fbin[k];
 
-	free(back.bin);
-	free(front.bin);
-	
 	return new;
 }
 
-int rematch(regex_t re, char* s, int sub) {
-	if(sub)
+int rematch(regex_t re, char* s) {
+	int sub = 0;
+	if(re.bin[0] != BLINE || re.bin[re.len - 2] != ELINE) {
 		re = submatch(re);
+		sub = 1;
+	}
 
 	Threadlist clist = (Threadlist){ .pos = 0 };
 	clist.t = (int*)malloc(re.len * sizeof(int));

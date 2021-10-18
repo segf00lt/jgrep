@@ -9,6 +9,7 @@ typedef struct {
 } regex_t;
 
 regex_t recompile(char* exp);
-int rematch(regex_t re, char* s, int sub);
+void refree(regex_t* re);
+int rematch(regex_t re, char* s);
 
 #endif

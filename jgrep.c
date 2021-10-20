@@ -10,184 +10,211 @@
 #include "regex.h"
 
 #define LINELEN 1024
+#define REGEX_MAX 32
 
 #define USAGE "Usage: jgrep [OPTION]... PATTERNS [FILE]...\n"
 
 #define IGNORE_DIR 0
 #define RECURSE_DIR 1
 
-regex_t REGEXPS[32];
-
-struct Filelist {
-	FILE** p;
-	int sz;
-};
-
-struct Relist {
-	regex_t* p;
-	int sz;
-};
-
-struct tnode {
-	char* name;
-	int fd;
-};
-
-struct Table {
-	struct tnode* p;
-	int sz;
-};
-
-void cleanup(Filelist* fl, Table* tbl, Relist* rl) {
-	for(int i = 0; i < fl->sz; ++i)
-		fclose(fl->p[i]);
-	free(fl->p);
-
-	free(tbl->p);
-
-	for(int i = 0; i < rl->sz; ++i)
-		refree(rl->p[i]);
-	free(rl->p);
+int roundpow2(int n) {
+	--n;
+	n |= n >> 1;
+	n |= n >> 2;
+	n |= n >> 4;
+	n |= n >> 8;
+	n |= n >> 16;
+	++n;
+	return n;
 }
 
-void recursedir(DIR* dp, Filelist* f) {
+char* mystrcat(char* dest, char* src) {
+	while(*dest) ++dest;
+	while(*dest++ = *src++);
+	return --dest;
+}
+
+char linebuf[LINELEN];
+
+regex_t regexprs[REGEX_MAX];
+int r = 0;
+
+/* store given file and or directory names */
+char* handles[512];
+int h = 0;
+
+typedef struct {
+	char** p;
+	int ln;
+	int sz;
+} strarr;
+
+int num = 0;
+int dirpol = IGNORE_DIR;
+
+int isreg(char* handle) {
+	struct stat s;
+	stat(handle, &s);
+	return S_ISREG(s.st_mode);
+}
+
+int isdir(char* handle) {
+	struct stat s;
+	stat(handle, &s);
+	return S_ISDIR(s.st_mode);
+}
+
+void cleanup(regex_t regexprs[], int r, strarr* f) {
+	int i = 0;
+	for(i = 0; i < r; ++i)
+		refree(&regexprs[i]);
+	for(i = 0; i < f->ln; ++i)
+		free(f->p[i]);
+	free(f->p);
+}
+
+int readstdin(void) {
+	while((fgets(linebuf, LINELEN, stdin)) != NULL) {
+		int match = 0;
+		int lnum = 0;
+
+		for(int i = 0; i < r && match != 1; ++i)
+			match = rematch(regexprs[r - 1], linebuf);
+
+		if(match) {
+			if(num)
+				printf("%d: ", lnum++);
+			printf("%s", linebuf);
+		}
+	}
+}
+
+int readfiles(strarr* files) {
+	char** p = files->p;
+	int n = files->ln;
+	int i = 0;
+
+	while(i < n) {
+		FILE* fp = fopen(p[i], "r");
+		while((fgets(linebuf, LINELEN, fp)) != NULL) {
+			int match = 0;
+			int lnum = 0;
+
+			for(int j = 0; j < r && match != 1; ++j)
+				match = rematch(regexprs[r - 1], linebuf);
+
+			if(match) {
+				if(num)
+					printf("%d: ", lnum++);
+				printf("%s", linebuf);
+			}
+		}
+		++i;
+		fclose(fp);
+	}
+}
+
 /* write me */
-}
+void recursedir(char* dirpath, strarr* files) {
+	char path[1024];
+	strcpy(path, dirpath);
+	struct dirent* ent = NULL;
+	DIR* dp = opendir(dirpath);
 
-int isreg(int fd) {
-	struct stat* s;
-	stat(fd, s);
-	return S_ISREG(s->st_mode);
-}
+	if(!dp)
+		return;
 
-int isdir(int fd) {
-	struct stat* s;
-	fstat(fd, s);
-	return S_ISDIR(s->st_mode);
-}
+	while((ent = readdir(dp)) != NULL) {
+		if(strcmp(ent->d_name, ".") == 0 && strcmp(ent->d_name, "..") == 0)
+			continue;
+		if(isdir(ent->d_name))
+			recursedir(path, files);
+		else if(isreg(ent->d_name)) {
+			char* fname = (char*)calloc(roundpow2(strlen(path) + strlen(ent->d_name)), sizeof(char));
+			char* end = mystrcat(fname, path);
+			end = mystrcat(end, ent->d_name);
 
-int dirfirst(const void* a, const void* b) {
-	struct tnode tn_a = *((struct tnode*)a);
-	struct tnode tn_b = *((struct tnode*)b);
+			if(files->ln == files->sz) {
+				files->sz += 8;
+				files->p = (char**)realloc(files->p, files->sz * sizeof(char*));
+			}
+			files->p[files->ln++] = fname;
+		}
+	}
 
-	return isreg(tn_a.fd) && isdir(tn_b.fd);
+	closedir(dp);
+	return;
 }
 
 int main(int argc, char* argv[]) {
-	char linebuf[LINELEN];
+	if(argc == 1) {
+		fprintf(stderr, "%s: too few arguments\n", argv[0]);
+		return 1;
+	}
 
-	struct Table tbl = (struct Table){ .p = (struct tnode*)malloc(8 * sizeof(struct tnode)), .sz = 8 };
-	int tbl_pos = 0;
+	/* store final set of file names */
+	strarr files;
 
-	struct tnode tn;
-
-	struct Filelist fl;
-	int fl_pos = 0;
-
-	struct Relist rl = (struct Relist){ .p = REGEXPS };
-	int rl_pos = 0;
-
-	int NUMBER = 0;
-	int DIRPOLICY = IGNORE_DIR;
-
+	int c;
 	while((c = getopt(argc, argv, "e:nd:f:h")) != -1) {
 		switch(c) {
-			case 'f':
-				if(tbl_pos + 1 == tbl.sz - (tbl.sz / 2)) {
-					tbl.sz *= 4;
-					tbl.p = (struct tnode*)realloc(tbl.p, tbl.sz * sizeof(struct tnode));
-				}
-				tn.name = strdup(optarg);
-				tn.fd = open(optarg, O_RDONLY);
-				tbl.p[tbl_pos++] = tn;
-				break;
-			case 'e':
-				if(rl_pos == 31) {
-					fprinf(stderr, "jgrep: too many expressions given\n");
-					cleanup(&fl, &tbl, &rl);
-					return 1;
-				}
-				rl.p[rl_pos++] = recompile(optarg);
-				break;
 			case 'n':
-				NUMBER = 1;
+				num = 1;
 				break;
 			case 'd':
-				DIRPOLICY = atoi(optarg);
+				dirpol = atoi(optarg);
 				break;
 			case 'h':
 				fprintf(stderr, "%s", USAGE);
-				cleanup(&fl, &tbl, &rl);
-				return 1;
+				cleanup(regexprs, r, &files);
+				return 0;
+			case 'f':
+				handles[h++] = optarg;
+				break;
+			case 'e':
+				if(r == 31) {
+					fprintf(stderr, "%s: too many expressions given\n", argv[0]);
+					cleanup(regexprs, r, &files);
+					return 1;
+				}
+				regexprs[r++] = recompile(optarg);
+				break;
 			case '?':
-				cleanup(&fl, &tbl, &rl);
+				cleanup(regexprs, r, &files);
 				return 1;
 		}
 	}
 
 	if(optind == 1) {
-		rl.p[rl_pos++] = recompile(argv[optind++]);
+		regexprs[r++] = recompile(argv[optind++]);
 	}
 
-	for(; optind < argc; ++optind) {
-		char* arg = argv[optind];
-		if(tbl_pos + 1 == tbl.sz - (tbl.sz / 2)) {
-			tbl.sz *= 4;
-			tbl.p = (struct tnode*)realloc(tbl.p, tbl.sz * sizeof(struct tnode));
-		}
-		tn.name = strdup(arg);
-		tn.fd = open(arg, O_RDONLY);
-		tbl.p[tbl_pos++] = tn;
+	while(optind < argc) {
+		handles[h++] = argv[optind++];
 	}
 
-	fl.sz = tbl.sz;
-	fl.p = (FILE**)malloc(fl.sz * (FILE*));
-
-	switch(tbl_pos) {
+	switch(h) {
 		case 0:
-			fl.p[0] = stdin;
-			fl.sz = 1;
-			break;
+			readstdin();
+			cleanup(regexprs, r, &files);
+			return 0;
 		default:
-			qsort((void*)tbl.p, tbl.sz, sizeof(struct tnode), dirfirst);
+			files.sz = h;
+			files.ln = 0;
+			files.p = (char**)malloc(files.sz * sizeof(char*));
 
-			for(tbl_pos = 0; tbl_pos < tbl.sz; ++tbl_pos) {
-				tn = tbl.p[tbl_pos];
-				DIR* dp = NULL;
-
-				if(isdir(tn.fd)) {
-					if(DIRPOLICY == IGNORE_DIR)
-						continue;
-
-					dp = fdopendir(tn.fd);
-					recursedir(dp, &fl);
+			for(int i = 0; i < h; ++i) {
+				char* handle = handles[i];
+				if(isreg(handle)) {
+					int l = strlen(handle);
+					files.p[files.ln++] = (char*)malloc((l + 1) * sizeof(char));
+					strcpy(files.p[i], handle);
 				}
-				else if(isreg(tn.fd))
-					fl.p[fl_pos++] = fdopen(tn.fd, "r");
-				else
-					fprintf(stderr, "%s: binary file matched\n", tn.name);
+				else if(isdir(handle))
+					recursedir(handle, &files);
 			}
-			break;
+			readfiles(&files);
+			cleanup(regexprs, r, &files);
+			return 0;
 	}
-
-	for(fl_pos = 0; fl_pos < fl.sz; ++fl_pos) {
-		FILE* fp = fl.p[fl_pos];
-		while((fgets(linebuf, LINELEN, fp)) != NULL) {
-			int match = 0;
-			int lnum = 0;
-
-			for(rl_pos = 0; rl_pos < rl.sz && match != 1; ++rl_pos)
-				match = rematch(rl.p[rl_pos], linebuf);
-
-			if(match) {
-				if(NUMBER)
-					printf("%d: ", lnum++);
-				printf("%s", linebuf);
-			}
-		}
-	}
-
-	cleanup(&fl, &tbl, &rl);
-
-	return 0;
 }

@@ -195,7 +195,7 @@ static char* parse(char* exp) {
 					exit(1);
 				}
 
-				if(pc == 'a' && nc == 'z' || pc == 'A' && nc == 'Z' || pc == '0' && nc == '9') {
+				if((pc=='a' && nc=='z') || (pc=='A' && nc=='Z') || (pc=='0' && nc=='9')) {
 					buf[i - 1] = '\\';
 					buf[i++] = nc;
 				} else {
@@ -370,6 +370,10 @@ static regex_t generate(char* post) {
 	int stackpos = 0;
 	int stacksize = 0;
 
+	/* char buffer and counter for character classes */
+	char s[97];
+	int i = 0;
+
 	for(char* c = post; *c; ++c) {
 		tmp = frag0 = frag1 = frag2 = nilfrag;
 		switch(*c) {
@@ -486,8 +490,6 @@ static regex_t generate(char* post) {
 				break;
 
 			case '[':
-				char s[97];
-				int i = 0;
 				for(++c; *c != ']'; ++c) {
 					if(*c == 127)
 						continue;

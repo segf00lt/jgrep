@@ -16,7 +16,7 @@ special characters, which must be escaped with `\`
 
 `0-9` Digits
 
-`A-z` Alphabetical, upper and lowercase
+~~`A-z` Alphabetical, upper and lowercase~~
 
 ### Metacharacters:
 `.` Wildcard, matches any character
@@ -27,9 +27,9 @@ special characters, which must be escaped with `\`
 
 `*` Any number of times
 
-`{n}` `n` times, where `n` is an `int >= 0`
+~~`{n}` `n` times, where `n` is an `int >= 0`~~
 
-`{n,m}` `n` through `m` times, ibid.
+~~`{n,m}` `n` through `m` times, ibid.~~
 
 ### Grouping operators:
 `[]` Character class
@@ -80,17 +80,17 @@ his 1968 paper, but I want to eventually use `.` as wildcard).
 
 Another option is Prefix notation, or "Polish notation". This is the same as
 Postfix, except operators precede operands. The regex from the previous
-paragraph in prefix notation would be `|&ab&ba`. Postfix may be slightly easier
-to evaluate though.
+paragraph in prefix notation would be `|&ab&ba`. Postfix ~~may be slightly~~
+much easier to evaluate though.
 
 **Tip**: An expression with n characters compiles to a NFA with k states, k
 being equal to n minus the number of parenthesis.
 
 #### Operators (in order of precedence)
 "\*" any number of "+" one or more "?" at most one
+"|" alternation
 "&" concatenation
 "(" begin group
-"|" alternation
 ")" end group
 
 ### A note on `void` pointers
@@ -144,4 +144,12 @@ Our first implementation was essentially a way of representing the Finite
 Automata diagrams in code. The new implementation will be bytecode
 for a virtual machine. This VM will be our match function. As of the time of writing
 this section, I have just finished I prototype of this implementation in python stored
-in `testing/regex.py`.
+in `testing/regex.py` (no longer included in the repo, check the commit history).
+
+## Writing `grep` itself
+
+Now for the part I thought would be easy. Turns out it's harder when one's brain has
+been turned to mush after weeks implementing a regular expression engine from scratch.
+
+One thing that particularly "cooked my noodle" was writing the function to recurse
+through directories.

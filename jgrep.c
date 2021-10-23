@@ -102,7 +102,6 @@ int readfiles(strarr* files) {
 	return 1;
 }
 
-/* write me */
 void recursedir(char* basepath, strarr* files) {
 	int baselen = strlen(basepath);
 	char* filepath = (char*)calloc((baselen + 1 + 1 + 255), sizeof(char));

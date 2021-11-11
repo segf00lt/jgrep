@@ -10,3 +10,6 @@ helper.c
 helper.h
 const.h
 *.vim
+curtest
+jgrep
+test

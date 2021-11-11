@@ -14,8 +14,8 @@
 
 #define USAGE "Usage: jgrep [OPTION]... PATTERNS [FILE]...\n"
 
-#define IGNORE_DIR 0
-#define RECURSE_DIR 1
+#define IGNORE_DIR 'i'
+#define RECURSE_DIR 'r'
 
 char linebuf[LINELEN];
 
@@ -33,7 +33,7 @@ typedef struct {
 } strarr;
 
 int num = 0;
-int dirpol = IGNORE_DIR;
+char dirpol = IGNORE_DIR;
 
 int isreg(char* handle) {
 	struct stat s;
@@ -53,10 +53,11 @@ void cleanup(regex_t regexprs[], int r, strarr* f) {
 	int i = 0;
 	for(i = 0; i < r; ++i)
 		refree(&regexprs[i]);
-	for(i = 0; i < f->ln; ++i)
-		free(f->p[i]);
-	if(f->p != NULL)
+	if(f->p != NULL) {
+		for(i = 0; i < f->ln; ++i)
+			free(f->p[i]);
 		free(f->p);
+	}
 }
 
 int readstdin(void) {
@@ -161,7 +162,7 @@ int main(int argc, char* argv[]) {
 				num = 1;
 				break;
 			case 'd':
-				dirpol = atoi(optarg);
+				dirpol = optarg[0];
 				break;
 			case 'h':
 				cleanup(regexprs, r, &files);
@@ -184,7 +185,7 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	if(optind == 1)
+	if(optind >= 1)
 		regexprs[r++] = recompile(argv[optind++]);
 
 	while(optind < argc)
@@ -207,8 +208,15 @@ int main(int argc, char* argv[]) {
 					files.p[files.ln++] = (char*)malloc((l + 1) * sizeof(char));
 					strcpy(files.p[i], handle);
 				}
-				else if(isdir(handle))
+				else if(isdir(handle) && (dirpol == RECURSE_DIR))
 					recursedir(handle, &files);
+				else if(dirpol == IGNORE_DIR)
+					continue;
+				else {
+					fprintf(stderr, "%s: %s: no such file or directory\n", argv[0], handle);
+					cleanup(regexprs, r, &files);
+					exit(1);
+				}
 			}
 			readfiles(&files);
 			cleanup(regexprs, r, &files);

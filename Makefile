@@ -1,5 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -pedantic
+DEBUGFLAGS = -Wall -pedantic -g
 
 PREFIX = /usr/local
 
@@ -10,7 +11,11 @@ all:
 	${CC} ${CFLAGS} -o jgrep ${SRC}
 
 clean:
-	rm -f jgrep
+	rm -f jgrep debug
+
+debug:
+	@echo debug build flags: ${DEBUGFLAGS}
+	${CC} ${DEBUGFLAGS} -o debug ${SRC}
 
 install: all
 	cp -f jgrep ${PREFIX}/bin

@@ -12,7 +12,8 @@
 #define LINELEN 1024
 #define REGEX_MAX 32
 
-#define USAGE "Usage: jgrep [OPTION]... PATTERNS [FILE]...\n"
+#define USAGE \
+"Usage: jgrep [OPTION]... PATTERNS [FILE]...\n-n\tnumber lines\n-d [ri]\trecurse or ignore directories\n-f\tinput file\n-e\tinput expression\n-h\tprint this message\n"
 
 #define IGNORE_DIR 'i'
 #define RECURSE_DIR 'r'

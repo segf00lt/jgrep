@@ -1,10 +1,11 @@
 CC = gcc
 CFLAGS = -Wall -pedantic
-DEBUGFLAGS = -Wall -pedantic -g
+DEBUG_FLAGS = -Wall -pedantic -g
 
 PREFIX = /usr/local
 
 SRC = jgrep.c regex.c
+DEBUG_SRC = jgrep.debug.c regex.debug.c
 
 all:
 	@echo jgrep build flags: ${CFLAGS}
@@ -14,8 +15,13 @@ clean:
 	rm -f jgrep debug
 
 debug:
-	@echo debug build flags: ${DEBUGFLAGS}
-	${CC} ${DEBUGFLAGS} -o debug ${SRC}
+	@echo debug build flags: ${DEBUG_FLAGS}
+	cat jgrep.c > jgrep.debug.c
+	sed '/char\* post = parse(exp)\;/a\
+		\tfprintf(stderr, "postfixed expr: %s\\n", post);' \
+		regex.c > regex.debug.c
+	${CC} ${DEBUG_FLAGS} -o debug ${DEBUG_SRC}
+	rm -f ${DEBUG_SRC}
 
 install: all
 	cp -f jgrep ${PREFIX}/bin
@@ -23,3 +29,5 @@ install: all
 
 uninstall:
 	rm -f ${PREFIX}/bin/jgrep
+
+.PHONY: all clean debug install uninstall

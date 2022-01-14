@@ -12,7 +12,7 @@ all:
 	${CC} ${CFLAGS} -o jgrep ${SRC}
 
 clean:
-	rm -f jgrep debug
+	rm -f jgrep debug ${DEBUG_SRC}
 
 debug:
 	@echo debug build flags: ${DEBUG_FLAGS}
@@ -21,7 +21,6 @@ debug:
 		\tfprintf(stderr, "postfixed expr: %s\\n", post);' \
 		regex.c > regex.debug.c
 	${CC} ${DEBUG_FLAGS} -o debug ${DEBUG_SRC}
-	rm -f ${DEBUG_SRC}
 
 install: all
 	cp -f jgrep ${PREFIX}/bin

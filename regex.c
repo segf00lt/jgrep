@@ -40,12 +40,9 @@ static char cache1[MAX];
 static char cache2[MAX];
 static regex_t cache3[MAX];
 
-static void cacheinit(void) {
-	for(int i = 0; i <= MAX; ++i) {
-		cache1[i] = cache2[i] = 0;
-		cache3[i] = (regex_t){ .bin = NULL, .len = 0 };
-	}
-}
+#define PILE(stack, top, elem) stack[++top] = elem
+
+#define POP(stack, top) stack[top--]
 
 static char* parse(char* exp) {
 	int l_exp = strlen(exp);
@@ -58,8 +55,7 @@ static char* parse(char* exp) {
 		exit(1);
 	}
 	char* stack = cache1;
-	int stackpos = 0;
-	int stacksize = 0;
+	int stack_top = -1;
 
 	char* buf = cache2;
 	int i = 0;
@@ -89,13 +85,7 @@ static char* parse(char* exp) {
 
 				n_atoms = 0;
 
-				if(stacksize > 0)
-					++stackpos;
-				else
-					stackpos = 0;
-
-				stack[stackpos] = *c;
-				++stacksize;
+				PILE(stack, stack_top, *c);
 				break;
 
 			case '|':
@@ -111,19 +101,10 @@ static char* parse(char* exp) {
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = baseop;
 
-				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '('; --stacksize)
-				{
-					buf[i++] = stack[stackpos];
-					stack[stackpos--] = 0;
-				}
+				while(stack_top >= 0 && stack[stack_top] != '(')
+					buf[i++] = POP(stack, stack_top);
 
-				if(stacksize > 0)
-					++stackpos;
-				else
-					stackpos = 0;
-
-				stack[stackpos] = *c;
-				++stacksize;
+				PILE(stack, stack_top, *c);
 				break;
 
 			case ')':
@@ -139,19 +120,10 @@ static char* parse(char* exp) {
 				for(--n_atoms; n_atoms > 0; --n_atoms)
 					buf[i++] = baseop;
 
-				for(; stacksize > 0 && stackpos >= 0 && stack[stackpos] != '('; --stacksize)
-				{
-					buf[i++] = stack[stackpos];
-					stack[stackpos--] = 0;
-				}
+				while(stack_top >= 0 && stack[stack_top] != '(')
+					buf[i++] = POP(stack, stack_top);
 
-				if(stacksize == 0) {
-					stackpos = 0;
-					stack[stackpos] = 0;
-				} else {
-					stack[stackpos--] = 0;
-					--stacksize;
-				}
+				--stack_top;
 
 				n_atoms = prev_atoms[--j] + 1;
 				break;
@@ -303,10 +275,8 @@ static char* parse(char* exp) {
 	for(--n_atoms; n_atoms > 0; --n_atoms)
 		buf[i++] = '&';
 
-	for(; stacksize > 0; --stacksize) {
-		buf[i++] = stack[stackpos];
-		stack[stackpos--] = 0;
-	}
+	while(stack_top >= 0)
+		buf[i++] = POP(stack, stack_top);
 
 	return buf;
 }
@@ -324,25 +294,7 @@ static inline int getnum(char* c) {
 	return n;
 }
 
-static void pilefrag(regex_t frag, regex_t* stack, int* stacksize, int* stackpos) {
-	if(*stacksize > 0)
-		++(*stackpos);
-	++(*stacksize);
-	stack[*stackpos] = frag;
-}
-	
-static regex_t popfrag(regex_t* stack, int* stacksize, int* stackpos) {
-	regex_t frag = stack[*stackpos];
-	stack[*stackpos] = (regex_t){ .bin = NULL, .len = 0 };
-	if(*stacksize > 1) {
-		--(*stackpos);
-		--(*stacksize);
-	} else
-		*stackpos = *stacksize = 0;
-	return frag;
-}
-
-static regex_t progcat(regex_t f1, regex_t f2) {
+static regex_t fragcat(regex_t f1, regex_t f2) {
 	regex_t f0;
 	f0.len = f1.len + f2.len;
 	f0.bin = (char*)calloc(f0.len + 1, sizeof(char));
@@ -367,8 +319,7 @@ static regex_t generate(char* post) {
 	regex_t frag2 = nilfrag;
 	regex_t tmp = nilfrag;
 	regex_t* stack = cache3;
-	int stackpos = 0;
-	int stacksize = 0;
+	int stack_top = -1;
 
 	/* char buffer and counter for character classes */
 	char s[97];
@@ -383,33 +334,36 @@ static regex_t generate(char* post) {
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
 				frag0.bin[OP] = CHAR;
 				frag0.bin[DATA] = *c;
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '^':
 				frag0.len = BLINELEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
 				frag0.bin[OP] = BLINE;
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '$':
 				frag0.len = ELINELEN;
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
 				frag0.bin[OP] = ELINE;
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '|':
-				frag2 = popfrag(stack, &stacksize, &stackpos);
-				frag1 = popfrag(stack, &stacksize, &stackpos);
+				frag2 = POP(stack, stack_top);
+				frag1 = POP(stack, stack_top);
 
 				tmp.len = JUMPLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
 				tmp.bin[OP] = JUMP;
 				setnum(tmp.bin + ARROW_0, frag2.len + 2);
 
-				frag1 = progcat(frag1, tmp);
+				frag1 = fragcat(frag1, tmp);
 				tmp = nilfrag;
 
 				frag0.len = ALTLEN;
@@ -418,14 +372,14 @@ static regex_t generate(char* post) {
 				setnum(frag0.bin + ARROW_0, 4);
 				setnum(frag0.bin + ARROW_1, frag1.len + 2);
 
-				frag0 = progcat(frag0, frag1);
-				frag0 = progcat(frag0, frag2);
+				frag0 = fragcat(frag0, frag1);
+				frag0 = fragcat(frag0, frag2);
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '?':
-				frag0 = popfrag(stack, &stacksize, &stackpos);
+				frag0 = POP(stack, stack_top);
 
 				tmp.len = ALTLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
@@ -433,13 +387,13 @@ static regex_t generate(char* post) {
 				setnum(tmp.bin + ARROW_0, 4);
 				setnum(tmp.bin + ARROW_1, frag0.len + 2);
 
-				frag0 = progcat(tmp, frag0);
+				frag0 = fragcat(tmp, frag0);
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '+':
-				frag0 = popfrag(stack, &stacksize, &stackpos);
+				frag0 = POP(stack, stack_top);
 
 				tmp.len = ALTLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
@@ -447,27 +401,27 @@ static regex_t generate(char* post) {
 				setnum(tmp.bin + ARROW_0, 4);
 				setnum(tmp.bin + ARROW_1, 5);
 
-				frag0 = progcat(frag0, tmp);
+				frag0 = fragcat(frag0, tmp);
 
 				tmp.len = BACKLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
 				tmp.bin[OP] = BACK;
 				setnum(tmp.bin + ARROW_0, frag0.len + 1);
 
-				frag0 = progcat(frag0, tmp);
+				frag0 = fragcat(frag0, tmp);
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '*':
-				frag0 = popfrag(stack, &stacksize, &stackpos);
+				frag0 = POP(stack, stack_top);
 
 				tmp.len = BACKLEN;
 				tmp.bin = (char*)calloc(tmp.len + 1, sizeof(char));
 				tmp.bin[0] = BACK;
 				setnum(tmp.bin + ARROW_0, frag0.len + 6);
 
-				frag0 = progcat(frag0, tmp);
+				frag0 = fragcat(frag0, tmp);
 
 				tmp.len = ALTLEN;
 				tmp.bin = (char*)calloc(frag0.len + 1, sizeof(char));
@@ -475,18 +429,18 @@ static regex_t generate(char* post) {
 				setnum(tmp.bin + ARROW_0, 4);
 				setnum(tmp.bin + ARROW_1, frag0.len + 2);
 
-				frag0 = progcat(tmp, frag0);
+				frag0 = fragcat(tmp, frag0);
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '&':
-				frag2 = popfrag(stack, &stacksize, &stackpos);
-				frag1 = popfrag(stack, &stacksize, &stackpos);
+				frag2 = POP(stack, stack_top);
+				frag1 = POP(stack, stack_top);
 
-				frag0 = progcat(frag1, frag2);
+				frag0 = fragcat(frag1, frag2);
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '[':
@@ -507,7 +461,7 @@ static regex_t generate(char* post) {
 				setnum(frag0.bin + DATA, i);
 				memcpy(frag0.bin + 3, s, i + 1);
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			case '.':
@@ -515,7 +469,7 @@ static regex_t generate(char* post) {
 				frag0.bin = (char*)calloc(frag0.len + 1, sizeof(char));
 				frag0.bin[OP] = WILD;
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 			default:
@@ -524,7 +478,7 @@ static regex_t generate(char* post) {
 				frag0.bin[OP] = CHAR;
 				frag0.bin[DATA] = *c;
 
-				pilefrag(frag0, stack, &stacksize, &stackpos);
+				PILE(stack, stack_top, frag0);
 				break;
 
 		}
@@ -534,14 +488,18 @@ static regex_t generate(char* post) {
 	prog.bin = (char*)calloc(prog.len + 1, sizeof(char));
 	prog.bin[OP] = MATCH;
 
-	for(; stacksize > 0; --stacksize)
-		prog = progcat(stack[stackpos--], prog);
+	while(stack_top >= 0)
+		prog = fragcat(POP(stack, stack_top), prog);
 
 	return prog;
 }
 
 regex_t recompile(char* exp) {
-	cacheinit();
+	for(int i = 0; i < MAX; ++i) {
+		cache1[i] = 0;
+		cache2[i] = 0;
+		cache3[i] = (regex_t){ .bin = NULL, .len = 0 };
+	}
 	char* post = parse(exp);
 	regex_t re = generate(post);
 	return re;

@@ -551,27 +551,22 @@ static int inclass(char* class, int len, char c) {
 
 static regex_t submatch(regex_t re) {
 	char bbin[9] = { 5, 4, 0, 6, 0, 2, 4, 7, 0 }; /* \0x5\0x4\0x0\0x6\0x0\0x2\0x4\0x7\0x0 */
-	char fbin[10] = { 5, 4, 0, 6, 0, 2, 4, 7, 0, 11 }; /* \0x5\0x4\0x0\0x6\0x0\0x2\0x4\0x7\0x0\0xb */
-	--re.len;
-	regex_t new = (regex_t){ .bin = NULL, .len = 9 + re.len + 10 };
+	regex_t new = (regex_t){ .bin = NULL, .len = 9 + re.len };
 	new.bin = (char*)calloc(new.len + 1, sizeof(char));
 
 	int i = 0;
 	int j = 0;
-	int k = 0;
 	for(; i < 9; ++i)
 		new.bin[i] = bbin[i];
-	for(i = 9; j < re.len; ++j)
+	for(; j < re.len; ++j)
 		new.bin[i++] = re.bin[j];
-	for(i = 9 + re.len; k < 10; ++k)
-		new.bin[i++] = fbin[k];
 
 	return new;
 }
 
 int rematch(regex_t re, char* s) {
 	int sub = 0;
-	if(re.bin[0] != BLINE || re.bin[re.len - 2] != ELINE) {
+	if(re.bin[0] != BLINE) {
 		re = submatch(re);
 		sub = 1;
 	}
@@ -636,13 +631,11 @@ int rematch(regex_t re, char* s) {
 					break;
 
 				case MATCH:
-					if(sp == s_len) {
-						if(sub)
-							free(re.bin);
-						free(clist.t);
-						free(nlist.t);
-						return 1;
-					}
+					if(sub)
+						free(re.bin);
+					free(clist.t);
+					free(nlist.t);
+					return 1;
 					break;
 			}
 		}
